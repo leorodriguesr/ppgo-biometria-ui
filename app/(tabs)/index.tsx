@@ -1,98 +1,164 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+
+import { clearDatabase } from '@/src/services/database';
+import { Alert } from 'react-native';
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const router = useRouter();
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+  const handleClearDB = async () => {
+    Alert.alert(
+      'Limpar Banco Local',
+      'Tem certeza que deseja apagar todos os presos do dispositivo?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Apagar Tudo',
+          style: 'destructive',
+          onPress: async () => {
+            await clearDatabase();
+            Alert.alert('Sucesso', 'Banco de dados limpo.');
+          }
+        }
+      ]
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <View>
+          <TouchableOpacity onLongPress={handleClearDB}>
+            <ThemedText type="title">PPGO Biometria</ThemedText>
+          </TouchableOpacity>
+          <ThemedText style={styles.subtitle}>Sistema de Identificação Prisional</ThemedText>
+        </View>
+        <Ionicons name="shield-checkmark" size={32} color="#007AFF" />
+      </View>
+
+      <ScrollView contentContainerStyle={styles.content}>
+        <TouchableOpacity
+          style={styles.mainAction}
+          onPress={() => router.push('/capture')}
+        >
+          <Ionicons name="scan-circle" size={64} color="#fff" />
+          <ThemedText type="subtitle" style={styles.actionText}>IDENTIFICAR PRESO</ThemedText>
+          <ThemedText style={styles.actionSubtext}>Reconhecimento Facial</ThemedText>
+        </TouchableOpacity>
+
+        <View style={styles.grid}>
+          <TouchableOpacity style={styles.card} onPress={() => router.push('/register')}>
+            <Ionicons name="person-add" size={32} color="#007AFF" />
+            <ThemedText type="defaultSemiBold">Novo Cadastro</ThemedText>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.card} onPress={() => router.push('/prisoners')}>
+            <Ionicons name="search" size={32} color="#007AFF" />
+            <ThemedText type="defaultSemiBold">Buscar Detento</ThemedText>
+          </TouchableOpacity>
+        </View>
+
+        <ThemedView style={styles.recentContainer}>
+          <ThemedText type="subtitle">Atividades Recentes</ThemedText>
+          <View style={styles.recentItem}>
+            <Ionicons name="alert-circle" size={24} color="#FF9500" />
+            <View style={styles.recentInfo}>
+              <ThemedText type="defaultSemiBold">Tentativa de Acesso</ThemedText>
+              <ThemedText style={styles.timestamp}>Hoje, 10:42</ThemedText>
+            </View>
+          </View>
+        </ThemedView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  container: {
+    flex: 1,
+    backgroundColor: '#F2F2F7',
+    paddingTop: 60,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    marginBottom: 20,
+  },
+  subtitle: {
+    opacity: 0.6,
+    fontSize: 14,
+  },
+  content: {
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+  },
+  mainAction: {
+    backgroundColor: '#007AFF', // Police Blue
+    borderRadius: 20,
+    padding: 30,
+    alignItems: 'center',
+    marginBottom: 20,
+    shadowColor: '#007AFF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  actionText: {
+    color: '#fff',
+    marginTop: 10,
+    fontSize: 20,
+  },
+  actionSubtext: {
+    color: 'rgba(255,255,255,0.8)',
+    marginTop: 4,
+  },
+  grid: {
+    flexDirection: 'row',
+    gap: 15,
+    marginBottom: 20,
+  },
+  card: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    display: 'flex',
+    gap: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  recentContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  recentItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    marginTop: 15,
+    gap: 15,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  recentInfo: {
+    flex: 1,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  timestamp: {
+    fontSize: 12,
+    opacity: 0.5,
   },
 });
