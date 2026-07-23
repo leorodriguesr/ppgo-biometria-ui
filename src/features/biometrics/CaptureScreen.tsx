@@ -1,6 +1,6 @@
 import { usePendingBiometrics } from '@/src/context/PendingBiometricsContext';
 import { generateEmbedding } from '@/src/services/api';
-import { getPrisonerById, identifyByEmbeddingLocal } from '@/src/services/database';
+import { addActivity, getPrisonerById, identifyByEmbeddingLocal } from '@/src/services/database';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -65,6 +65,7 @@ export default function CaptureScreen() {
                             pathname: '/register',
                             params: {
                                 photo: uri,
+                                draftPrisonerId: (params.draftPrisonerId as string) ?? '',
                                 prefillName: (params.prefillName as string) ?? '',
                                 prefillMotherName: (params.prefillMotherName as string) ?? '',
                                 prefillDob: (params.prefillDob as string) ?? '',
@@ -149,6 +150,15 @@ export default function CaptureScreen() {
                             const prisoner = await getPrisonerById(presoId);
 
                             if (prisoner) {
+                                try {
+                                    await addActivity({
+                                        type: 'identify',
+                                        prisonerId: Number(presoId),
+                                        prisonerName: prisoner.name,
+                                    });
+                                } catch (e) {
+                                    console.warn('Falha ao registrar atividade:', e);
+                                }
                                 router.replace({
                                     pathname: '/identify-result',
                                     params: {
@@ -160,6 +170,11 @@ export default function CaptureScreen() {
                                 Alert.alert('Atenção', `Face reconhecida (ID: ${presoId}), mas dados não encontrados no banco local.`);
                             }
                         } else {
+                            try {
+                                await addActivity({ type: 'identify_fail' });
+                            } catch {
+                                // ignore
+                            }
                             const distMsg =
                                 result.distance != null
                                     ? ` Melhor distância: ${result.distance.toFixed(2)} (abaixo do limite para dar match).`

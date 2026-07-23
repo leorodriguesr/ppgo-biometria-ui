@@ -1,7 +1,9 @@
+import { getAuthHeaders } from '@/src/auth/AuthApi';
+
 // Python: geração de embedding 512 (face → vetor)
-export const API_URL = 'http://172.20.10.12:8000';
-// export const API_URL = 'http://localhost:8000';        // iOS Simulator
-// export const API_URL = 'http://10.0.2.2:8000';         // Android Emulator
+export const API_URL = 'http://172.20.10.5:8000';     // device físico / mesma Wi-Fi
+// export const API_URL = 'http://localhost:8000';      // iOS Simulator
+// export const API_URL = 'http://10.0.2.2:8000';       // Android Emulator
 
 // Java: recebe embedding, compara no banco, retorna resultado
 export const JAVA_API_URL = 'http://192.168.1.4:8080';
@@ -37,6 +39,54 @@ export interface ExtractedPrisonerDocumentData {
 }
 
 /**
+ * Valida iluminação da imagem (sem exigir rosto). Usado em fotos de perfil.
+ */
+export const validatePhotoQuality = async (
+    photoUri: string
+): Promise<{ ok: true; brightness: number }> => {
+    const formData = new FormData();
+    formData.append('file', {
+        uri: photoUri,
+        name: 'photo.jpg',
+        type: 'image/jpeg',
+    } as unknown as Blob);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+    try {
+        const response = await fetch(`${API_URL}/validate-photo-quality`, {
+            method: 'POST',
+            headers: await getAuthHeaders(),
+            body: formData,
+            signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        const data = await response.json();
+        const errorPayload =
+            data?.detail && typeof data.detail === 'object' && !Array.isArray(data.detail)
+                ? data.detail
+                : data;
+
+        if (!response.ok) {
+            if (isErrorBody(errorPayload)) {
+                throw new Error(errorPayload.code);
+            }
+            throw new Error(`Falha ao validar qualidade: ${response.status}`);
+        }
+
+        return { ok: true, brightness: Number(data.brightness) || 0 };
+    } catch (error: unknown) {
+        clearTimeout(timeoutId);
+        if (error instanceof Error && error.name === 'AbortError') {
+            throw new Error('Tempo limite excedido. Verifique a conexão e tente novamente.');
+        }
+        throw error;
+    }
+};
+
+/**
  * Envia a imagem da face para a API e retorna o embedding facial.
  * Em caso de erro (ex.: NO_FACE_DETECTED, ENCODING_FAILED), lança com message adequada.
  */
@@ -54,6 +104,7 @@ export const generateEmbedding = async (photoUri: string): Promise<number[]> => 
     try {
         const response = await fetch(`${API_URL}/generate-embedding`, {
             method: 'POST',
+            headers: await getAuthHeaders(),
             body: formData,
             signal: controller.signal,
         });
@@ -69,7 +120,15 @@ export const generateEmbedding = async (photoUri: string): Promise<number[]> => 
         if (!response.ok) {
             if (isErrorBody(errorPayload)) {
                 const code = errorPayload.code;
-                if (code === 'NO_FACE_DETECTED' || code === 'ENCODING_FAILED' || code === 'INVALID_IMAGE' || code === 'INVALID_FILE') {
+                if (
+                    code === 'NO_FACE_DETECTED' ||
+                    code === 'MULTIPLE_FACES' ||
+                    code === 'LOW_FACE_CONFIDENCE' ||
+                    code === 'FACE_TOO_SMALL' ||
+                    code === 'ENCODING_FAILED' ||
+                    code === 'INVALID_IMAGE' ||
+                    code === 'INVALID_FILE'
+                ) {
                     throw new Error(code);
                 }
                 const msg = typeof errorPayload.detail === 'string' ? errorPayload.detail : errorPayload.message || code;
@@ -117,7 +176,7 @@ export const identifyByEmbedding = async (embedding: number[]): Promise<Identify
     try {
         const response = await fetch(`${JAVA_API_URL}/identify`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: await getAuthHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ embedding }),
             signal: controller.signal,
         });
@@ -159,6 +218,7 @@ export const extractPrisonerDataFromDocument = async (
     try {
         const response = await fetch(`${API_URL}/extract-document-data`, {
             method: 'POST',
+            headers: await getAuthHeaders(),
             body: formData,
             signal: controller.signal,
         });
