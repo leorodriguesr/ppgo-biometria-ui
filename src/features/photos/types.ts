@@ -40,7 +40,7 @@ export const BUST_PHOTO_LABELS: Record<BustPhotoKind, string> = {
 };
 
 export const BUST_PHOTO_HINTS: Record<BustPhotoKind, string> = {
-  front: 'Enquadre cabeça e tórax de frente, com o banner ao fundo.',
-  right_profile: 'Vire o perfil para a direita. Cabeça e tórax no quadro.',
-  left_profile: 'Vire o perfil para a esquerda. Cabeça e tórax no quadro.',
+  front: 'Alinhe o rosto à silhueta de frente. Cabeça em cima, tórax embaixo.',
+  right_profile: 'Alinhe o perfil direito à silhueta. Cabeça em cima, tórax embaixo.',
+  left_profile: 'Alinhe o perfil esquerdo à silhueta. Cabeça em cima, tórax embaixo.',
 };

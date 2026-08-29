@@ -48,6 +48,14 @@
           "recordAudioAndroid": false
         }
       ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.5"
+          }
+        }
+      ],
       "expo-secure-store"
     ],
     "experiments": {

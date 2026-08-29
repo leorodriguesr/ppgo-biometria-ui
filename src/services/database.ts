@@ -46,7 +46,7 @@ const ensureDb = async (): Promise<SQLite.SQLiteDatabase> => {
 };
 
 /** Incrementar para forçar novo wipe local (ex.: pedido do usuário). */
-const LOCAL_DB_WIPE_TOKEN = 'wipe-2026-07-22-4';
+const LOCAL_DB_WIPE_TOKEN = 'wipe-2026-08-17-1';
 
 async function runOneTimeWipeIfNeeded(database: SQLite.SQLiteDatabase): Promise<void> {
     await database.execAsync(`
@@ -88,6 +88,11 @@ export interface PrisonerPhotoRow {
     photo_uri: string;
     quality_ok: number;
     created_at: string;
+    /** ID da enum TipoSinal (API). */
+    sinal: string | null;
+    /** ID da enum ParteCorpo (API). */
+    parte_corpo: string | null;
+    observacao: string | null;
 }
 
 async function migratePrisonerPhotos(database: SQLite.SQLiteDatabase): Promise<void> {
@@ -100,9 +105,19 @@ async function migratePrisonerPhotos(database: SQLite.SQLiteDatabase): Promise<v
             body_side TEXT,
             photo_uri TEXT NOT NULL,
             quality_ok INTEGER DEFAULT 1,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            sinal TEXT,
+            parte_corpo TEXT,
+            observacao TEXT
         );
     `);
+    for (const col of ['sinal', 'parte_corpo', 'observacao'] as const) {
+        try {
+            await database.runAsync(`ALTER TABLE prisoner_photos ADD COLUMN ${col} TEXT`);
+        } catch {
+            // coluna já existe
+        }
+    }
 }
 
 export type ActivityType = 'register' | 'identify' | 'identify_fail';
@@ -147,6 +162,9 @@ export interface PrisonerRow {
     address: string | null;
     phone: string | null;
     email: string | null;
+    sexo: string | null;
+    rg: string | null;
+    orgao_emissor: string | null;
 }
 
 /** Migração: adiciona coluna face_embedding se a tabela já existia sem ela. */
@@ -170,6 +188,9 @@ const NEW_COLUMNS = [
     'address',
     'phone',
     'email',
+    'sexo',
+    'rg',
+    'orgao_emissor',
 ] as const;
 
 async function migrateNewPrisonerFields(database: SQLite.SQLiteDatabase): Promise<void> {
@@ -198,6 +219,9 @@ export type PrisonerExtraFields = {
     address?: string;
     phone?: string;
     email?: string;
+    sexo?: string;
+    rg?: string;
+    orgaoEmissor?: string;
 };
 
 export const addPrisoner = async (
@@ -214,8 +238,9 @@ export const addPrisoner = async (
         `INSERT INTO prisoners (
             name, mother_name, dob, cpf, photo_uri, face_embedding,
             social_name, nationality, marital_status, profession, education,
-            age, birth_place, filiation, address, phone, email
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            age, birth_place, filiation, address, phone, email,
+            sexo, rg, orgao_emissor
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         name,
         motherName,
         dob,
@@ -232,7 +257,10 @@ export const addPrisoner = async (
         extra?.filiation ?? null,
         extra?.address ?? null,
         extra?.phone ?? null,
-        extra?.email ?? null
+        extra?.email ?? null,
+        extra?.sexo ?? null,
+        extra?.rg ?? null,
+        extra?.orgaoEmissor ?? null
     );
     return result.lastInsertRowId;
 };
@@ -271,6 +299,9 @@ export const updatePrisoner = async (
         ['address', fields.address],
         ['phone', fields.phone],
         ['email', fields.email],
+        ['sexo', fields.sexo],
+        ['rg', fields.rg],
+        ['orgao_emissor', fields.orgaoEmissor],
     ];
 
     for (const [column, value] of map) {
@@ -346,6 +377,9 @@ export const addPrisonerPhoto = async (input: {
     bodyRegion?: string;
     bodySide?: string;
     qualityOk?: boolean;
+    sinal?: string;
+    parteCorpo?: string;
+    observacao?: string;
 }): Promise<number> => {
     const database = await ensureDb();
     // Frente/perfis: uma foto por tipo (substitui a anterior)
@@ -358,15 +392,19 @@ export const addPrisonerPhoto = async (input: {
     }
     const result = await database.runAsync(
         `INSERT INTO prisoner_photos (
-            prisoner_id, photo_type, body_region, body_side, photo_uri, quality_ok, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            prisoner_id, photo_type, body_region, body_side, photo_uri, quality_ok, created_at,
+            sinal, parte_corpo, observacao
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         input.prisonerId,
         input.photoType,
         input.bodyRegion ?? null,
         input.bodySide ?? null,
         input.photoUri,
         input.qualityOk === false ? 0 : 1,
-        new Date().toISOString()
+        new Date().toISOString(),
+        input.sinal ?? null,
+        input.parteCorpo ?? null,
+        input.observacao?.trim() || null
     );
     return Number(result.lastInsertRowId);
 };

@@ -1,10 +1,14 @@
 import { useAuth } from '@/src/auth/AuthProvider';
 import { SsoLoginWebView } from '@/src/auth/SsoLoginWebView';
 import { setTokenSso } from '@/src/auth/tokenStorage';
+import { BrandWordmark } from '@/src/components/BrandWordmark';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
+  Image,
+  Modal,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -31,6 +35,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       void performLogout();
     }
   }, [authData.deslogar, performLogout]);
+
+  useEffect(() => {
+    if (!authData.sessionExpired) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, [authData.sessionExpired]);
 
   const handleSsoSuccess = async (token: string) => {
     setSsoVisible(false);
@@ -60,11 +70,46 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (authData.isAuthenticated && !authData.userLogado.semPerfilThisSistema) {
-    return <>{children}</>;
+  const hasValidUser = Boolean(
+    authData.isAuthenticated && authData.userLogado.token && authData.userLogado.servidor
+  );
+
+  if (hasValidUser && !authData.userLogado.semPerfilThisSistema) {
+    return (
+      <View style={styles.appRoot}>
+        <View
+          style={styles.appRoot}
+          pointerEvents={authData.sessionExpired ? 'none' : 'auto'}
+        >
+          {children}
+        </View>
+        <Modal
+          visible={authData.sessionExpired}
+          transparent
+          animationType="fade"
+          onRequestClose={() => undefined}
+        >
+          <View style={styles.sessionBackdrop}>
+            <View style={styles.sessionCard}>
+              <Text style={styles.sessionTitle}>Sessão expirada</Text>
+              <Text style={styles.sessionBody}>
+                Sua sessão expirou. É necessário realizar o login novamente para continuar.
+              </Text>
+              <TouchableOpacity
+                style={styles.sessionButton}
+                onPress={() => void performLogout()}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.sessionButtonText}>Efetuar login</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      </View>
+    );
   }
 
-  if (authData.isAuthenticated && authData.userLogado.semPerfilThisSistema) {
+  if (hasValidUser && authData.userLogado.semPerfilThisSistema) {
     return (
       <SafeAreaView style={styles.center}>
         <Ionicons name="lock-closed-outline" size={48} color="#B45309" />
@@ -85,30 +130,38 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   return (
     <SafeAreaView style={styles.loginRoot}>
-      <View style={styles.hero}>
-        <View style={styles.badge}>
-          <Ionicons name="finger-print" size={40} color="#fff" />
-        </View>
-        <Text style={styles.brand}>PPGO Biometria</Text>
-        <Text style={styles.subtitle}>Sistema de Identificação Prisional</Text>
+      <View style={styles.topBar}>
+        <Image
+          source={require('../../assets/images/logopp.png')}
+          style={styles.logoPp}
+          resizeMode="contain"
+          accessibilityLabel="Polícia Penal"
+        />
       </View>
 
-      {(authData.authError || ssoMessage) && (
-        <Text style={styles.error}>{authData.authError || ssoMessage}</Text>
-      )}
+      <View style={styles.loginBody}>
+        <View style={styles.hero}>
+          <BrandWordmark size={32} />
+          <Text style={styles.subtitle}>Sistema de identificação prisional</Text>
+        </View>
 
-      <TouchableOpacity
-        style={styles.button}
-        onPress={() => {
-          clearAuthError();
-          setSsoMessage(null);
-          setSsoVisible(true);
-        }}
-        activeOpacity={0.85}
-      >
-        <Ionicons name="log-in-outline" size={22} color="#fff" />
-        <Text style={styles.buttonText}>Entrar</Text>
-      </TouchableOpacity>
+        {(authData.authError || ssoMessage) && (
+          <Text style={styles.error}>{authData.authError || ssoMessage}</Text>
+        )}
+
+        <TouchableOpacity
+          style={styles.button}
+          onPress={() => {
+            clearAuthError();
+            setSsoMessage(null);
+            setSsoVisible(true);
+          }}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="log-in-outline" size={22} color="#fff" />
+          <Text style={styles.buttonText}>Entrar</Text>
+        </TouchableOpacity>
+      </View>
 
       <SsoLoginWebView
         visible={ssoVisible}
@@ -126,6 +179,48 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 const styles = StyleSheet.create({
+  appRoot: {
+    flex: 1,
+  },
+  sessionBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  sessionCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 22,
+  },
+  sessionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 10,
+  },
+  sessionBody: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: '#4B5563',
+    marginBottom: 22,
+  },
+  sessionButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 12,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  sessionButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
   center: {
     flex: 1,
     alignItems: 'center',
@@ -138,27 +233,28 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F2F2F7',
     paddingHorizontal: 24,
+  },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  logoPp: {
+    width: 120,
+    height: 120,
+  },
+  loginBody: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 100,
+    gap: 60,
+    paddingBottom: 24,
   },
   hero: {
     alignItems: 'center',
-    gap: 10,
-  },
-  badge: {
-    width: 72,
-    height: 72,
-    borderRadius: 20,
-    backgroundColor: '#0D9488',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  brand: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#111827',
+    gap: 4,
   },
   title: {
     fontSize: 22,
@@ -170,7 +266,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#6B7280',
     textAlign: 'center',
-    lineHeight: 22,
+    lineHeight: 20,
   },
   hint: {
     marginTop: 8,
@@ -186,7 +282,7 @@ const styles = StyleSheet.create({
   },
   button: {
     alignSelf: 'stretch',
-    backgroundColor: '#0D9488',
+    backgroundColor: '#007AFF',
     borderRadius: 14,
     minHeight: 52,
     paddingHorizontal: 18,

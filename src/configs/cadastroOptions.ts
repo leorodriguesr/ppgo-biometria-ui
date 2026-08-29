@@ -1,8 +1,18 @@
 export type SelectOption = { label: string; value: string };
 
 export const SEXO_OPTIONS: SelectOption[] = [
-  { label: 'Masculino', value: 'Masculino' },
-  { label: 'Feminino', value: 'Feminino' },
+  { label: 'Masculino', value: 'M' },
+  { label: 'Feminino', value: 'F' },
+];
+
+/** Valores alinhados ao exemplo do contrato de pré-cadastro. */
+export const ESTADO_CIVIL_API_OPTIONS: SelectOption[] = [
+  { label: 'Solteiro(a)', value: 'SOLTEIRO' },
+  { label: 'Casado(a)', value: 'CASADO' },
+  { label: 'União estável', value: 'UNIAO_ESTAVEL' },
+  { label: 'Viúvo(a)', value: 'VIUVO' },
+  { label: 'Divorciado(a)', value: 'DIVORCIADO' },
+  { label: 'Separado(a)', value: 'SEPARADO' },
 ];
 
 export const GENERO_OPTIONS: SelectOption[] = [

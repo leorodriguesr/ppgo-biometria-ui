@@ -1,8 +1,9 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 import { apiLogoutUsuarioLogado, apiValidateTokenSso } from './AuthApi';
 import { prepareDataUser, type UserLogado } from './AuthUtils';
 import { clearTokenSso, getTokenSso } from './tokenStorage';
+import { setUnauthorizedHandler } from './unauthorizedSession';
 
 export type AuthData = {
   userLogado: UserLogado;
@@ -13,6 +14,7 @@ export type AuthData = {
   redirectLogin: boolean;
   bootstrapped: boolean;
   authError: string | null;
+  sessionExpired: boolean;
 };
 
 const initialAuthData: AuthData = {
@@ -24,13 +26,14 @@ const initialAuthData: AuthData = {
   redirectLogin: false,
   bootstrapped: false,
   authError: null,
+  sessionExpired: false,
 };
 
 type AuthContextValue = {
   authData: AuthData;
   setAuthData: React.Dispatch<React.SetStateAction<AuthData>>;
   bootstrapSession: () => Promise<void>;
-  /** Persiste o token e marca sessão autenticada (sem entrar no sistema agenda). */
+  /** Valida o token no SSO e marca sessão autenticada somente se o validate for OK. */
   acceptSsoToken: (token: string) => Promise<boolean>;
   validateSession: (token?: string) => Promise<boolean>;
   requestLogout: () => void;
@@ -40,23 +43,28 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+class InvalidSsoSessionError extends Error {
+  constructor() {
+    super('INVALID_SSO_SESSION');
+    this.name = 'InvalidSsoSessionError';
+  }
+}
+
 /**
- * Valida o token no SSO (opcional). Se validate falhar mas o token existir,
- * ainda autentica — o objetivo é só guardar o access_token para as APIs.
+ * Valida o token no SSO. Só autentica se o validate retornar OK com JSON do usuário.
  */
 async function resolveUserFromToken(token: string): Promise<UserLogado> {
-  try {
-    const response = await apiValidateTokenSso(token);
-    if (response.ok) {
-      const contentType = response.headers.get('content-type') ?? '';
-      if (contentType.includes('application/json')) {
-        return prepareDataUser({ ...(await response.json()), token });
-      }
-    }
-  } catch {
-    // ignore — token ainda é útil para as APIs
+  const response = await apiValidateTokenSso(token);
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!response.ok || !contentType.includes('application/json')) {
+    throw new InvalidSsoSessionError();
   }
-  return prepareDataUser({ token });
+
+  try {
+    return prepareDataUser({ ...(await response.json()), token });
+  } catch {
+    throw new InvalidSsoSessionError();
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -83,14 +91,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         bootstrapped: true,
         deslogar: false,
         redirectLogin: false,
+        sessionExpired: false,
         authError: null,
       }));
       return true;
     } catch (error) {
+      await clearTokenSso();
+      const silent = error instanceof InvalidSsoSessionError;
       setAuthData({
         ...initialAuthData,
         bootstrapped: true,
-        authError: error instanceof Error ? error.message : 'Falha ao salvar token SSO',
+        authError: silent
+          ? null
+          : error instanceof Error
+            ? error.message
+            : 'Falha ao validar token SSO',
       });
       return false;
     }
@@ -125,6 +140,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const requestLogout = useCallback(() => {
     setAuthData((prev) => ({ ...prev, deslogar: true }));
+  }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setAuthData((prev) =>
+        prev.sessionExpired || prev.deslogar || prev.deslogando
+          ? prev
+          : { ...prev, sessionExpired: true }
+      );
+    });
+    return () => setUnauthorizedHandler(null);
   }, []);
 
   const performLogout = useCallback(async () => {

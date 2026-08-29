@@ -1,6 +1,7 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/src/auth';
+import { BrandWordmark } from '@/src/components/BrandWordmark';
 import {
   clearDatabase,
   getPrisonerById,
@@ -141,9 +142,9 @@ export default function HomeScreen() {
               resizeMode="contain"
             />
             <View style={styles.brandText}>
-              <ThemedText type="title">PPGO Biometria</ThemedText>
+              <BrandWordmark size={28} />
               <ThemedText style={styles.subtitle}>
-                {userName ? `Olá, ${userName}` : 'Sistema de Identificação Prisional'}
+                {userName ? `Olá, ${userName}` : 'Sistema de identificação prisional'}
               </ThemedText>
             </View>
           </TouchableOpacity>
@@ -237,8 +238,8 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   logo: {
-    width: 52,
-    height: 52,
+    width: 110,
+    height: 110,
   },
   brandText: {
     flex: 1,

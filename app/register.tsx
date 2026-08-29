@@ -1,21 +1,15 @@
 import { ThemedText } from '@/components/themed-text';
+import { isUnauthorizedError } from '@/src/auth/unauthorizedSession';
 import { FormSectionCard } from '@/src/components/FormSectionCard';
 import { SelectField } from '@/src/components/SelectField';
-import { ToggleField } from '@/src/components/ToggleField';
 import {
-  ESTADO_CIVIL_OPTIONS,
-  GENERO_OPTIONS,
+  ESTADO_CIVIL_API_OPTIONS,
   GRAU_INSTRUCAO_OPTIONS,
-  NACIONALIDADE_OPTIONS,
-  RELIGIAO_OPTIONS,
   SEXO_OPTIONS,
-  SITUACAO_OPTIONS,
 } from '@/src/configs/cadastroOptions';
 import { usePendingBiometrics } from '@/src/context/PendingBiometricsContext';
 import {
-  BODY_REGION_LABELS,
   BUST_PHOTO_LABELS,
-  type BodyRegionId,
   type BustPhotoKind,
 } from '@/src/features/photos/types';
 import {
@@ -27,6 +21,13 @@ import {
   updatePrisoner,
   type PrisonerPhotoRow,
 } from '@/src/services/database';
+import { submitPreCadastroFromLocal } from '@/src/services/preCadastroMapper';
+import {
+  clearRegisterDraft,
+  getRegisterDraft,
+  setRegisterDraft,
+  type RegisterFormDraft,
+} from '@/src/services/registerDraftStore';
 import { maskCpf, maskDateBr, toDobBr } from '@/src/utils/inputMasks';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -46,14 +47,7 @@ import {
 
 type RegisterStep = 'dados' | 'biometria' | 'fotos';
 
-type SectionId =
-  | 'identificacao'
-  | 'documentos'
-  | 'endereco'
-  | 'contato'
-  | 'situacao'
-  | 'caracteristicas'
-  | 'social';
+type SectionId = 'identificacao' | 'documentos' | 'endereco' | 'social';
 
 const BUST_KINDS: BustPhotoKind[] = ['front', 'right_profile', 'left_profile'];
 type FotoTimelineStep = BustPhotoKind | 'marks';
@@ -73,72 +67,90 @@ function paramToString(value: string | string[] | undefined): string {
 
 const INPUT_PLACEHOLDER_COLOR = '#dddddd';
 
+const REQUIRED_FIELD_LABELS = {
+  nome: 'Nome Completo',
+  sexo: 'Sexo',
+  mae: 'Nome da Mãe',
+  dataNascimento: 'Data de Nascimento',
+  cpf: 'CPF',
+} as const;
+
 export default function RegisterScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { pending, clearPending } = usePendingBiometrics();
+  const initialDraft = getRegisterDraft();
 
-  const [step, setStep] = useState<RegisterStep>('dados');
+  const [step, setStep] = useState<RegisterStep>(initialDraft?.step ?? 'dados');
   const [openSection, setOpenSection] = useState<SectionId | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [localPrisonerId, setLocalPrisonerId] = useState<number | null>(null);
+  const [photoUri, setPhotoUri] = useState<string | null>(initialDraft?.photoUri ?? null);
+  const [localPrisonerId, setLocalPrisonerId] = useState<number | null>(
+    initialDraft?.localPrisonerId ?? null
+  );
   const [detaineePhotos, setDetaineePhotos] = useState<PrisonerPhotoRow[]>([]);
   const [fotoTimelineStep, setFotoTimelineStep] = useState<FotoTimelineStep>('front');
 
-  const [nome, setNome] = useState('');
-  const [nomeSocial, setNomeSocial] = useState('');
-  const [sexo, setSexo] = useState('');
-  const [genero, setGenero] = useState('');
-  const [mae, setMae] = useState('');
-  const [pai, setPai] = useState('');
-  const [dataNascimento, setDataNascimento] = useState('');
-  const [cpf, setCpf] = useState('');
-  const [rg, setRg] = useState('');
-  const [orgaoEmissor, setOrgaoEmissor] = useState('');
-  const [estadoCivil, setEstadoCivil] = useState('');
-  const [nacionalidade, setNacionalidade] = useState('Brasileiro - Nato');
-  const [email, setEmail] = useState('');
-  const [cnh, setCnh] = useState('');
-  const [categoriaCnh, setCategoriaCnh] = useState('');
-  const [tituloEleitor, setTituloEleitor] = useState('');
-  const [reservista, setReservista] = useState('');
-  const [gestante, setGestante] = useState(false);
-  const [lactante, setLactante] = useState(false);
-  const [responsavelDeficiente, setResponsavelDeficiente] = useState(false);
+  const [nome, setNome] = useState(initialDraft?.nome ?? '');
+  const [nomeSocial, setNomeSocial] = useState(initialDraft?.nomeSocial ?? '');
+  const [sexo, setSexo] = useState(initialDraft?.sexo ?? '');
+  const [mae, setMae] = useState(initialDraft?.mae ?? '');
+  const [pai, setPai] = useState(initialDraft?.pai ?? '');
+  const [dataNascimento, setDataNascimento] = useState(initialDraft?.dataNascimento ?? '');
+  const [cpf, setCpf] = useState(initialDraft?.cpf ?? '');
+  const [rg, setRg] = useState(initialDraft?.rg ?? '');
+  const [orgaoEmissor, setOrgaoEmissor] = useState(initialDraft?.orgaoEmissor ?? '');
+  const [estadoCivil, setEstadoCivil] = useState(initialDraft?.estadoCivil ?? '');
+  const [naturalidade, setNaturalidade] = useState(initialDraft?.naturalidade ?? '');
+  const [endereco, setEndereco] = useState(initialDraft?.endereco ?? '');
+  const [telefone, setTelefone] = useState(initialDraft?.telefone ?? '');
+  const [grauInstrucao, setGrauInstrucao] = useState(initialDraft?.grauInstrucao ?? '');
+  const [profissao, setProfissao] = useState(initialDraft?.profissao ?? '');
 
-  const [prontuario, setProntuario] = useState('');
-  const [alcunha, setAlcunha] = useState('');
-  const [situacao, setSituacao] = useState('Autorizado');
-  const [endereco, setEndereco] = useState('');
-  const [bairro, setBairro] = useState('');
-  const [cidade, setCidade] = useState('');
-  const [telefone, setTelefone] = useState('');
-  const [celular1, setCelular1] = useState('');
-  const [celular2, setCelular2] = useState('');
-  const [contato, setContato] = useState('');
-  const [telefoneContato, setTelefoneContato] = useState('');
-  const [conjuge, setConjuge] = useState('');
-  const [raca, setRaca] = useState('');
-  const [corPele, setCorPele] = useState('');
-  const [corOlhos, setCorOlhos] = useState('');
-  const [corCabelos, setCorCabelos] = useState('');
-  const [tipoCabelos, setTipoCabelos] = useState('');
-  const [peso, setPeso] = useState('');
-  const [altura, setAltura] = useState('');
-  const [tatuagens, setTatuagens] = useState('');
-  const [religiao, setReligiao] = useState('');
-  const [grauInstrucao, setGrauInstrucao] = useState('');
-  const [profissao, setProfissao] = useState('');
-  const [artigos, setArtigos] = useState('');
-  const [rji, setRji] = useState('');
-  const [tribo, setTribo] = useState('');
-  const [dialeto, setDialeto] = useState('');
-  const [deficienciaFisica, setDeficienciaFisica] = useState('');
-  const [cartaoSus, setCartaoSus] = useState('');
-  const [autorizadoCobal, setAutorizadoCobal] = useState('');
-  const [alertarMovimentacao, setAlertarMovimentacao] = useState(false);
+  /** Mantém rascunho em memória para não perder dados ao trocar etapa / remount. */
+  useEffect(() => {
+    const draft: RegisterFormDraft = {
+      nome,
+      nomeSocial,
+      sexo,
+      mae,
+      pai,
+      dataNascimento,
+      cpf,
+      rg,
+      orgaoEmissor,
+      estadoCivil,
+      naturalidade,
+      endereco,
+      telefone,
+      grauInstrucao,
+      profissao,
+      photoUri,
+      localPrisonerId,
+      step,
+    };
+    setRegisterDraft(draft);
+  }, [
+    nome,
+    nomeSocial,
+    sexo,
+    mae,
+    pai,
+    dataNascimento,
+    cpf,
+    rg,
+    orgaoEmissor,
+    estadoCivil,
+    naturalidade,
+    endereco,
+    telefone,
+    grauInstrucao,
+    profissao,
+    photoUri,
+    localPrisonerId,
+    step,
+  ]);
 
   useEffect(() => {
     if (params.photo) {
@@ -180,6 +192,49 @@ export default function RegisterScreen() {
       }
     }, [localPrisonerId, reloadDetaineePhotos])
   );
+
+  /** Rehidrata o form a partir do rascunho SQLite (volta da câmera remonta a tela). */
+  const applyPrisonerRowToForm = useCallback((row: NonNullable<Awaited<ReturnType<typeof getPrisonerById>>>) => {
+    if (row.name) setNome(row.name);
+    if (row.social_name) setNomeSocial(row.social_name);
+    if (row.sexo) setSexo(row.sexo);
+    if (row.mother_name) setMae(row.mother_name);
+    if (row.filiation) setPai(row.filiation);
+    if (row.dob) {
+      try {
+        setDataNascimento(toDobBr(row.dob));
+      } catch {
+        setDataNascimento(maskDateBr(row.dob));
+      }
+    }
+    if (row.cpf) setCpf(maskCpf(row.cpf));
+    if (row.rg) setRg(row.rg);
+    if (row.orgao_emissor) setOrgaoEmissor(row.orgao_emissor);
+    if (row.marital_status) setEstadoCivil(row.marital_status);
+    if (row.birth_place) setNaturalidade(row.birth_place);
+    if (row.address) setEndereco(row.address);
+    if (row.phone) setTelefone(row.phone);
+    if (row.education) setGrauInstrucao(row.education);
+    if (row.profession) setProfissao(row.profession);
+    if (row.photo_uri) setPhotoUri(row.photo_uri);
+  }, []);
+
+  useEffect(() => {
+    if (localPrisonerId == null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const row = await getPrisonerById(localPrisonerId);
+        if (!row || cancelled) return;
+        applyPrisonerRowToForm(row);
+      } catch (error) {
+        console.warn('Falha ao rehidratar rascunho:', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [localPrisonerId, applyPrisonerRowToForm]);
 
   useEffect(() => {
     const prefillName = paramToString(params.prefillName as string | string[] | undefined);
@@ -225,14 +280,13 @@ export default function RegisterScreen() {
     }
     if (prefillCpf) setCpf(maskCpf(prefillCpf));
     if (prefillSocialName) setNomeSocial(prefillSocialName);
-    if (prefillNationality) setNacionalidade(prefillNationality);
+    if (prefillNationality) setNaturalidade(prefillNationality);
     if (prefillMaritalStatus) setEstadoCivil(prefillMaritalStatus);
     if (prefillProfession) setProfissao(prefillProfession);
     if (prefillEducation) setGrauInstrucao(prefillEducation);
     if (prefillFiliation) setPai(prefillFiliation);
     if (prefillAddress) setEndereco(prefillAddress);
     if (prefillPhone) setTelefone(prefillPhone);
-    if (prefillEmail) setEmail(prefillEmail);
 
     if (prefillSource === 'face') {
       Alert.alert('Dados preenchidos', 'Dados preenchidos pela pesquisa facial.');
@@ -256,26 +310,53 @@ export default function RegisterScreen() {
     params.prefillEmail,
   ]);
 
-  useEffect(() => {
-    if (sexo !== 'Feminino') {
-      setGestante(false);
-      setLactante(false);
-    }
-  }, [sexo]);
-
   const canSaveBiometria = Boolean(pending && pending.photoUri === photoUri && photoUri);
-  const isDadosComplete = Boolean(
-    nome.trim() &&
-      mae.trim() &&
-      dataNascimento.length === 10 &&
-      cpf.length === 14 &&
-      sexo &&
-      situacao
-  );
+
+  const getMissingRequiredFields = (): string[] => {
+    const missing: string[] = [];
+    if (!nome.trim()) missing.push(REQUIRED_FIELD_LABELS.nome);
+    if (!sexo) missing.push(REQUIRED_FIELD_LABELS.sexo);
+    if (!mae.trim()) missing.push(REQUIRED_FIELD_LABELS.mae);
+    if (dataNascimento.length !== 10) missing.push(REQUIRED_FIELD_LABELS.dataNascimento);
+    if (cpf.length !== 14) missing.push(REQUIRED_FIELD_LABELS.cpf);
+    return missing;
+  };
+
+  const isDadosComplete = getMissingRequiredFields().length === 0;
+
+  const openSectionForMissingFields = (missing: string[]) => {
+    if (
+      missing.includes(REQUIRED_FIELD_LABELS.nome) ||
+      missing.includes(REQUIRED_FIELD_LABELS.sexo) ||
+      missing.includes(REQUIRED_FIELD_LABELS.mae) ||
+      missing.includes(REQUIRED_FIELD_LABELS.dataNascimento)
+    ) {
+      setOpenSection('identificacao');
+      return;
+    }
+    if (missing.includes(REQUIRED_FIELD_LABELS.cpf)) {
+      setOpenSection('documentos');
+    }
+  };
 
   const toggleSection = (id: SectionId) => {
     setOpenSection((current) => (current === id ? null : id));
   };
+
+  const goBackToDados = useCallback(async () => {
+    // Só rehidrata do SQLite se o form em memória estiver vazio (ex.: remount).
+    const formEmpty = !nome.trim() && !mae.trim() && !cpf.trim() && !sexo;
+    if (formEmpty && localPrisonerId != null) {
+      try {
+        const row = await getPrisonerById(localPrisonerId);
+        if (row) applyPrisonerRowToForm(row);
+      } catch (error) {
+        console.warn('Falha ao restaurar dados ao voltar:', error);
+      }
+    }
+    setOpenSection('identificacao');
+    setStep('dados');
+  }, [localPrisonerId, applyPrisonerRowToForm, nome, mae, cpf, sexo]);
 
   const buildLocalFields = () => ({
     name: nome.trim(),
@@ -283,25 +364,28 @@ export default function RegisterScreen() {
     dob: dataNascimento,
     cpf: cpf.trim(),
     socialName: nomeSocial.trim() || undefined,
-    nationality: nacionalidade || undefined,
     maritalStatus: estadoCivil || undefined,
     filiation: pai.trim() || undefined,
     profession: profissao.trim() || undefined,
     education: grauInstrucao || undefined,
-    address:
-      [endereco.trim(), bairro.trim(), cidade.trim()].filter(Boolean).join(' - ') || undefined,
-    phone: telefone.trim() || celular1.trim() || undefined,
-    email: email.trim() || undefined,
+    birthPlace: naturalidade.trim() || undefined,
+    address: endereco.trim() || undefined,
+    phone: telefone.trim() || undefined,
+    sexo: sexo || undefined,
+    rg: rg.trim() || undefined,
+    orgaoEmissor: orgaoEmissor.trim() || undefined,
   });
 
   const goToBiometria = async () => {
     if (isSubmitting) return;
-    if (!isDadosComplete) {
-      Alert.alert(
-        'Campos obrigatórios',
-        'Preencha nome, sexo, nome da mãe, data de nascimento, CPF e situação.'
-      );
-      setOpenSection('identificacao');
+    const missing = getMissingRequiredFields();
+    if (missing.length > 0) {
+      const message =
+        missing.length === 1
+          ? `Falta preencher: ${missing[0]}.`
+          : `Faltam preencher:\n• ${missing.join('\n• ')}`;
+      Alert.alert('Campos obrigatórios', message);
+      openSectionForMissingFields(missing);
       return;
     }
     try {
@@ -328,14 +412,16 @@ export default function RegisterScreen() {
           undefined,
           {
             socialName: fields.socialName,
-            nationality: fields.nationality,
             maritalStatus: fields.maritalStatus,
             filiation: fields.filiation,
             profession: fields.profession,
             education: fields.education,
+            birthPlace: fields.birthPlace,
             address: fields.address,
             phone: fields.phone,
-            email: fields.email,
+            sexo: fields.sexo,
+            rg: fields.rg,
+            orgaoEmissor: fields.orgaoEmissor,
           }
         );
         setLocalPrisonerId(Number(id));
@@ -343,6 +429,7 @@ export default function RegisterScreen() {
       setStep('biometria');
     } catch (error) {
       console.error('[CADASTRO] Falha ao salvar dados:', error);
+      if (isUnauthorizedError(error)) return;
       Alert.alert('Erro ao salvar', error instanceof Error ? error.message : 'Falha no cadastro local.');
     } finally {
       setIsSubmitting(false);
@@ -361,14 +448,13 @@ export default function RegisterScreen() {
         prefillDob: dataNascimento,
         prefillCpf: cpf,
         prefillSocialName: nomeSocial,
-        prefillNationality: nacionalidade,
+        prefillNationality: naturalidade,
         prefillMaritalStatus: estadoCivil,
         prefillProfession: profissao,
         prefillEducation: grauInstrucao,
         prefillFiliation: pai,
         prefillAddress: endereco,
         prefillPhone: telefone,
-        prefillEmail: email,
       },
     });
   };
@@ -423,14 +509,16 @@ export default function RegisterScreen() {
           embeddingJson,
           {
             socialName: fields.socialName,
-            nationality: fields.nationality,
             maritalStatus: fields.maritalStatus,
             filiation: fields.filiation,
             profession: fields.profession,
             education: fields.education,
+            birthPlace: fields.birthPlace,
             address: fields.address,
             phone: fields.phone,
-            email: fields.email,
+            sexo: fields.sexo,
+            rg: fields.rg,
+            orgaoEmissor: fields.orgaoEmissor,
           }
         );
         savedId = Number(id);
@@ -449,6 +537,7 @@ export default function RegisterScreen() {
       if (savedId != null) void reloadDetaineePhotos(savedId);
     } catch (error) {
       console.error('[CADASTRO] Falha ao salvar biometria:', error);
+      if (isUnauthorizedError(error)) return;
       Alert.alert('Erro na biometria', error instanceof Error ? error.message : 'Falha ao salvar biometria.');
     } finally {
       setIsSubmitting(false);
@@ -507,6 +596,7 @@ export default function RegisterScreen() {
   };
 
   const finishCadastro = async () => {
+    if (isSubmitting) return;
     if (!requiredPhotosOk) {
       Alert.alert(
         'Fotos obrigatórias',
@@ -514,22 +604,58 @@ export default function RegisterScreen() {
       );
       return;
     }
-    try {
-      if (localPrisonerId != null) {
-        const row = await getPrisonerById(localPrisonerId);
-        const prisonerName = nome.trim() || row?.name?.trim() || undefined;
-        await addActivity({
-          type: 'register',
-          prisonerId: localPrisonerId,
-          prisonerName,
-        });
-      }
-    } catch (error) {
-      console.warn('Falha ao registrar atividade:', error);
+    if (localPrisonerId == null) {
+      Alert.alert('Cadastro pendente', 'Salve a biometria antes de concluir.');
+      setStep('biometria');
+      return;
     }
-    Alert.alert('Sucesso', 'Cadastro concluído. O detento já aparece em Buscar Detento.', [
-      { text: 'OK', onPress: () => router.replace('/(tabs)') },
-    ]);
+
+    setIsSubmitting(true);
+    setStatusMessage('Preparando pré-cadastro...');
+    try {
+      const row = await getPrisonerById(localPrisonerId);
+      if (!row) throw new Error('Rascunho local não encontrado.');
+
+      // Atualiza rascunho só se o form ainda tiver os obrigatórios (evita wipe após remount)
+      if (isDadosComplete) {
+        await updatePrisoner(localPrisonerId, buildLocalFields());
+      }
+      const prisoner = (await getPrisonerById(localPrisonerId)) ?? row;
+      const photos = await getPrisonerPhotos(localPrisonerId);
+
+      await submitPreCadastroFromLocal({
+        prisoner,
+        photos,
+        onProgress: setStatusMessage,
+      });
+
+      const prisonerName = nome.trim() || prisoner.name?.trim() || undefined;
+      await addActivity({
+        type: 'register',
+        prisonerId: localPrisonerId,
+        prisonerName,
+      });
+
+      Alert.alert('Sucesso', 'Pré-cadastro enviado com sucesso.', [
+        {
+          text: 'OK',
+          onPress: () => {
+            clearRegisterDraft();
+            router.replace('/(tabs)');
+          },
+        },
+      ]);
+    } catch (error) {
+      console.error('[CADASTRO] Falha no pré-cadastro:', error);
+      if (isUnauthorizedError(error)) return;
+      Alert.alert(
+        'Erro no pré-cadastro',
+        'Não foi possível enviar o pré-cadastro. O rascunho local foi mantido. Veja o detalhe no terminal.'
+      );
+    } finally {
+      setIsSubmitting(false);
+      setStatusMessage('');
+    }
   };
 
   const goToFotos = () => {
@@ -549,7 +675,9 @@ export default function RegisterScreen() {
     <View style={styles.tabs}>
       <TouchableOpacity
         style={[styles.tabButton, step === 'dados' && styles.tabButtonActive]}
-        onPress={() => setStep('dados')}
+        onPress={() => {
+          void goBackToDados();
+        }}
       >
         <Text style={[styles.tabButtonText, step === 'dados' && styles.tabButtonTextActive]}>
           1. Dados
@@ -672,7 +800,9 @@ export default function RegisterScreen() {
             ) : (
               <View style={styles.timelineStage}>
                 <Text style={styles.timelineStageTitle}>Marcas e tatuagens</Text>
-                <Text style={styles.markHint}>Opcional — selecione a região no manequim.</Text>
+                <Text style={styles.markHint}>
+                  Opcional — tipo de sinal, parte do corpo e observação (API).
+                </Text>
 
                 {markPhotos.length > 0 ? (
                   <Image
@@ -693,12 +823,11 @@ export default function RegisterScreen() {
                     <View style={styles.markInfo}>
                       <Text style={styles.markTitle}>
                         {photo.photo_type === 'tattoo' ? 'Tatuagem' : 'Marca'}
+                        {photo.sinal ? ` · sinal ${photo.sinal}` : ''}
                       </Text>
                       <Text style={styles.markMeta}>
-                        {photo.body_side === 'back' ? 'Costas' : 'Frente'}
-                        {photo.body_region
-                          ? ` · ${BODY_REGION_LABELS[photo.body_region as BodyRegionId] ?? photo.body_region}`
-                          : ''}
+                        {photo.parte_corpo ? `Parte ${photo.parte_corpo}` : 'Sem parte do corpo'}
+                        {photo.observacao ? ` · ${photo.observacao}` : ''}
                       </Text>
                     </View>
                     <TouchableOpacity onPress={() => removeMarkPhoto(photo.id)}>
@@ -720,20 +849,29 @@ export default function RegisterScreen() {
         </ScrollView>
 
         <View style={styles.fotosFooter}>
+          {statusMessage ? <Text style={styles.statusHint}>{statusMessage}</Text> : null}
           <TouchableOpacity
-            style={[styles.primaryButton, styles.fotosFooterBtn, !requiredPhotosOk && styles.primaryButtonDisabled]}
+            style={[
+              styles.primaryButton,
+              styles.fotosFooterBtn,
+              (!requiredPhotosOk || isSubmitting) && styles.primaryButtonDisabled,
+            ]}
             onPress={finishCadastro}
-            disabled={!requiredPhotosOk}
+            disabled={!requiredPhotosOk || isSubmitting}
             activeOpacity={0.8}
           >
-            <Text
-              style={[
-                styles.primaryButtonText,
-                !requiredPhotosOk && styles.primaryButtonTextDisabled,
-              ]}
-            >
-              Concluir cadastro
-            </Text>
+            {isSubmitting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text
+                style={[
+                  styles.primaryButtonText,
+                  !requiredPhotosOk && styles.primaryButtonTextDisabled,
+                ]}
+              >
+                Enviar pré-cadastro
+              </Text>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -772,489 +910,167 @@ export default function RegisterScreen() {
               onToggle={() => toggleSection('identificacao')}
               requiredHint
             >
-            <ThemedText type="defaultSemiBold">Nome Completo *</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={nome}
-              onChangeText={setNome}
-              placeholder="Nome completo"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+              <ThemedText type="defaultSemiBold">Nome Completo *</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={nome}
+                onChangeText={setNome}
+                placeholder="Nome completo"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
 
-            <ThemedText type="defaultSemiBold">Nome Social</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={nomeSocial}
-              onChangeText={setNomeSocial}
-              placeholder="Nome social (se houver)"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+              <ThemedText type="defaultSemiBold">Nome Social</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={nomeSocial}
+                onChangeText={setNomeSocial}
+                placeholder="Nome social (se houver)"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
 
-            <ThemedText type="defaultSemiBold">Alcunha</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={alcunha}
-              onChangeText={setAlcunha}
-              placeholder="Alcunha / apelido"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+              <SelectField
+                label="Sexo *"
+                value={sexo}
+                options={SEXO_OPTIONS}
+                onChange={setSexo}
+                allowEmpty={false}
+              />
 
-            <SelectField label="Sexo *" value={sexo} options={SEXO_OPTIONS} onChange={setSexo} />
-            <SelectField label="Gênero" value={genero} options={GENERO_OPTIONS} onChange={setGenero} />
+              <ThemedText type="defaultSemiBold">Nome da Mãe *</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={mae}
+                onChangeText={setMae}
+                placeholder="Nome da mãe"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
 
-            <ThemedText type="defaultSemiBold">Nome da Mãe *</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={mae}
-              onChangeText={setMae}
-              placeholder="Nome da mãe"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+              <ThemedText type="defaultSemiBold">Nome do Pai</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={pai}
+                onChangeText={setPai}
+                placeholder="Nome do pai"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
 
-            <ThemedText type="defaultSemiBold">Nome do Pai</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={pai}
-              onChangeText={setPai}
-              placeholder="Nome do pai"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+              <ThemedText type="defaultSemiBold">Data de Nascimento *</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={dataNascimento}
+                onChangeText={(text) => setDataNascimento(maskDateBr(text))}
+                placeholder="DD/MM/YYYY"
+                keyboardType="number-pad"
+                maxLength={10}
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
 
-            <ThemedText type="defaultSemiBold">Data de Nascimento *</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={dataNascimento}
-              onChangeText={(text) => setDataNascimento(maskDateBr(text))}
-              placeholder="DD/MM/YYYY"
-              keyboardType="number-pad"
-              maxLength={10}
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+              <ThemedText type="defaultSemiBold">Naturalidade</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={naturalidade}
+                onChangeText={setNaturalidade}
+                placeholder="Ex: GOIANIA-GO"
+                autoCapitalize="characters"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
 
-            <SelectField
-              label="Nacionalidade"
-              value={nacionalidade}
-              options={NACIONALIDADE_OPTIONS}
-              onChange={setNacionalidade}
-              allowEmpty={false}
-            />
-            <SelectField
-              label="Estado Civil"
-              value={estadoCivil}
-              options={ESTADO_CIVIL_OPTIONS}
-              onChange={setEstadoCivil}
-            />
+              <SelectField
+                label="Estado Civil"
+                value={estadoCivil}
+                options={ESTADO_CIVIL_API_OPTIONS}
+                onChange={setEstadoCivil}
+              />
+            </FormSectionCard>
 
-            {sexo === 'Feminino' ? (
-              <>
-                <ToggleField label="Gestante" value={gestante} onChange={setGestante} />
-                <ToggleField label="Lactante" value={lactante} onChange={setLactante} />
-              </>
-            ) : null}
-            <ToggleField
-              label="Responsável por pessoa com deficiência"
-              value={responsavelDeficiente}
-              onChange={setResponsavelDeficiente}
-            />
-          </FormSectionCard>
+            <FormSectionCard
+              title="Documentos"
+              subtitle="CPF, RG e órgão emissor"
+              icon="id-card-outline"
+              open={openSection === 'documentos'}
+              onToggle={() => toggleSection('documentos')}
+              requiredHint
+            >
+              <ThemedText type="defaultSemiBold">CPF *</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={cpf}
+                onChangeText={(text) => setCpf(maskCpf(text))}
+                placeholder="000.000.000-00"
+                keyboardType="number-pad"
+                maxLength={14}
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
 
-          <FormSectionCard
-            title="Documentos"
-            subtitle="CPF, RG, CNH e outros"
-            icon="id-card-outline"
-            open={openSection === 'documentos'}
-            onToggle={() => toggleSection('documentos')}
-            requiredHint
-          >
-            <ThemedText type="defaultSemiBold">CPF *</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={cpf}
-              onChangeText={(text) => setCpf(maskCpf(text))}
-              placeholder="000.000.000-00"
-              keyboardType="number-pad"
-              maxLength={14}
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+              <ThemedText type="defaultSemiBold">RG</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={rg}
+                onChangeText={setRg}
+                placeholder="RG"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
 
-            <ThemedText type="defaultSemiBold">RG</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={rg}
-              onChangeText={setRg}
-              placeholder="RG"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+              <ThemedText type="defaultSemiBold">Órgão Emissor</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={orgaoEmissor}
+                onChangeText={setOrgaoEmissor}
+                placeholder="Ex: SSP-GO"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
+            </FormSectionCard>
 
-            <ThemedText type="defaultSemiBold">Órgão Emissor</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={orgaoEmissor}
-              onChangeText={setOrgaoEmissor}
-              placeholder="Ex: SSP/GO"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+            <FormSectionCard
+              title="Endereço e contato"
+              subtitle="Logradouro e telefone"
+              icon="home-outline"
+              open={openSection === 'endereco'}
+              onToggle={() => toggleSection('endereco')}
+            >
+              <ThemedText type="defaultSemiBold">Endereço</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={endereco}
+                onChangeText={setEndereco}
+                placeholder="Logradouro e número"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
 
-            <ThemedText type="defaultSemiBold">CNH</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={cnh}
-              onChangeText={setCnh}
-              placeholder="Número da CNH"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+              <ThemedText type="defaultSemiBold">Telefone</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={telefone}
+                onChangeText={setTelefone}
+                placeholder="62999999999"
+                keyboardType="phone-pad"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
+            </FormSectionCard>
 
-            <ThemedText type="defaultSemiBold">Categoria CNH</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={categoriaCnh}
-              onChangeText={setCategoriaCnh}
-              placeholder="Ex: AB"
-              autoCapitalize="characters"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
+            <FormSectionCard
+              title="Social"
+              subtitle="Escolaridade e profissão"
+              icon="school-outline"
+              open={openSection === 'social'}
+              onToggle={() => toggleSection('social')}
+            >
+              <SelectField
+                label="Escolaridade"
+                value={grauInstrucao}
+                options={GRAU_INSTRUCAO_OPTIONS}
+                onChange={setGrauInstrucao}
+              />
 
-            <ThemedText type="defaultSemiBold">Título de Eleitor</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={tituloEleitor}
-              onChangeText={setTituloEleitor}
-              placeholder="Título de eleitor"
-              keyboardType="numeric"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Reservista</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={reservista}
-              onChangeText={setReservista}
-              placeholder="Documento de reservista"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-          </FormSectionCard>
-
-          <FormSectionCard
-            title="Endereço"
-            subtitle="Logradouro, bairro e cidade"
-            icon="home-outline"
-            open={openSection === 'endereco'}
-            onToggle={() => toggleSection('endereco')}
-          >
-            <ThemedText type="defaultSemiBold">Endereço</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={endereco}
-              onChangeText={setEndereco}
-              placeholder="Logradouro e número"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Bairro</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={bairro}
-              onChangeText={setBairro}
-              placeholder="Bairro"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Cidade</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={cidade}
-              onChangeText={setCidade}
-              placeholder="Cidade"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-          </FormSectionCard>
-
-          <FormSectionCard
-            title="Contato"
-            subtitle="Telefones, e-mail e responsável"
-            icon="call-outline"
-            open={openSection === 'contato'}
-            onToggle={() => toggleSection('contato')}
-          >
-            <ThemedText type="defaultSemiBold">Telefone</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={telefone}
-              onChangeText={setTelefone}
-              placeholder="(00) 0000-0000"
-              keyboardType="phone-pad"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Celular 1</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={celular1}
-              onChangeText={setCelular1}
-              placeholder="(00) 00000-0000"
-              keyboardType="phone-pad"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Celular 2</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={celular2}
-              onChangeText={setCelular2}
-              placeholder="(00) 00000-0000"
-              keyboardType="phone-pad"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">E-mail</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={email}
-              onChangeText={setEmail}
-              placeholder="email@exemplo.com"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Contato</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={contato}
-              onChangeText={setContato}
-              placeholder="Nome do contato"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Telefone do contato</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={telefoneContato}
-              onChangeText={setTelefoneContato}
-              placeholder="Telefone do contato"
-              keyboardType="phone-pad"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Cônjuge</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={conjuge}
-              onChangeText={setConjuge}
-              placeholder="Nome do cônjuge"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-          </FormSectionCard>
-
-          <FormSectionCard
-            title="Situação prisional"
-            subtitle="Prontuário, artigos e visitação"
-            icon="briefcase-outline"
-            open={openSection === 'situacao'}
-            onToggle={() => toggleSection('situacao')}
-            requiredHint
-          >
-            <SelectField
-              label="Situação para visitação *"
-              value={situacao}
-              options={SITUACAO_OPTIONS}
-              onChange={setSituacao}
-              allowEmpty={false}
-            />
-
-            <ThemedText type="defaultSemiBold">Prontuário</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={prontuario}
-              onChangeText={setProntuario}
-              placeholder="Número do prontuário"
-              keyboardType="numeric"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Principal crime</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={artigos}
-              onChangeText={setArtigos}
-              placeholder="Principal crime"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">RJI</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={rji}
-              onChangeText={setRji}
-              placeholder="RJI"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Autorizado COBAL</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={autorizadoCobal}
-              onChangeText={setAutorizadoCobal}
-              placeholder="0"
-              keyboardType="numeric"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ToggleField
-              label="Alertar movimentação"
-              value={alertarMovimentacao}
-              onChange={setAlertarMovimentacao}
-            />
-          </FormSectionCard>
-
-          <FormSectionCard
-            title="Características físicas"
-            subtitle="Aparência e sinais"
-            icon="body-outline"
-            open={openSection === 'caracteristicas'}
-            onToggle={() => toggleSection('caracteristicas')}
-          >
-            <ThemedText type="defaultSemiBold">Raça</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={raca}
-              onChangeText={setRaca}
-              placeholder="Raça"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Cor da pele</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={corPele}
-              onChangeText={setCorPele}
-              placeholder="Cor da pele"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Cor dos olhos</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={corOlhos}
-              onChangeText={setCorOlhos}
-              placeholder="Cor dos olhos"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Cor dos cabelos</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={corCabelos}
-              onChangeText={setCorCabelos}
-              placeholder="Cor dos cabelos"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Tipo dos cabelos</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={tipoCabelos}
-              onChangeText={setTipoCabelos}
-              placeholder="Tipo dos cabelos"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Peso (kg)</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={peso}
-              onChangeText={setPeso}
-              placeholder="Ex: 70"
-              keyboardType="decimal-pad"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Altura (m)</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={altura}
-              onChangeText={setAltura}
-              placeholder="Ex: 1.75"
-              keyboardType="decimal-pad"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Tatuagens</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={tatuagens}
-              onChangeText={setTatuagens}
-              placeholder="Descrição das tatuagens"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-          </FormSectionCard>
-
-          <FormSectionCard
-            title="Social e saúde"
-            subtitle="Instrução, religião e SUS"
-            icon="medkit-outline"
-            open={openSection === 'social'}
-            onToggle={() => toggleSection('social')}
-          >
-            <SelectField
-              label="Grau de instrução"
-              value={grauInstrucao}
-              options={GRAU_INSTRUCAO_OPTIONS}
-              onChange={setGrauInstrucao}
-            />
-            <SelectField
-              label="Religião"
-              value={religiao}
-              options={RELIGIAO_OPTIONS}
-              onChange={setReligiao}
-            />
-
-            <ThemedText type="defaultSemiBold">Profissão</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={profissao}
-              onChangeText={setProfissao}
-              placeholder="Profissão"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Tribo</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={tribo}
-              onChangeText={setTribo}
-              placeholder="Tribo"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Dialeto</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={dialeto}
-              onChangeText={setDialeto}
-              placeholder="Dialeto"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Deficiência física</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={deficienciaFisica}
-              onChangeText={setDeficienciaFisica}
-              placeholder="Descrição, se houver"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-
-            <ThemedText type="defaultSemiBold">Cartão SUS</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={cartaoSus}
-              onChangeText={setCartaoSus}
-              placeholder="Número do cartão SUS"
-              keyboardType="numeric"
-              placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
-            />
-          </FormSectionCard>
+              <ThemedText type="defaultSemiBold">Profissão</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={profissao}
+                onChangeText={setProfissao}
+                placeholder="Profissão"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
+            </FormSectionCard>
           </View>
         </ScrollView>
 
@@ -1309,7 +1125,9 @@ export default function RegisterScreen() {
               <>
                 <TouchableOpacity
                   style={styles.secondaryButton}
-                  onPress={() => setStep('dados')}
+                  onPress={() => {
+                    void goBackToDados();
+                  }}
                   activeOpacity={0.8}
                 >
                   <Text style={styles.secondaryButtonText}>Voltar para dados</Text>

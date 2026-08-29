@@ -7,6 +7,10 @@ export {
   getUrlLogin,
 } from './AuthApi';
 export { AuthProvider, useAuth } from './AuthProvider';
+export {
+  isUnauthorizedError,
+  UnauthorizedError,
+} from './unauthorizedSession';
 export { prepareDataUser } from './AuthUtils';
 export type { UserLogado } from './AuthUtils';
 export { extractAccessToken, loginWithSso } from './ssoLogin';

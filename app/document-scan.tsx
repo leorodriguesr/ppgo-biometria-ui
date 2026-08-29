@@ -1,3 +1,4 @@
+import { isUnauthorizedError } from '@/src/auth/unauthorizedSession';
 import { parseDocumentLines, type ExtractedPrisonerDocumentData } from '@/src/services/documentOCR';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
@@ -106,6 +107,7 @@ export default function DocumentScanScreen() {
             });
         } catch (error) {
             console.error(error);
+            if (isUnauthorizedError(error)) return;
             Alert.alert('Erro', 'Falha ao escanear documento. Tente novamente.');
         } finally {
             setIsScanning(false);

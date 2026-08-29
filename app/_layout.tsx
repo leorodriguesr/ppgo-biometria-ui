@@ -80,6 +80,16 @@ export default function RootLayout() {
                 }}
               />
               <Stack.Screen
+                name="identify-matches"
+                options={{
+                  title: 'Possíveis correspondências',
+                  headerBackTitle: 'Voltar',
+                  headerTitleStyle: { fontWeight: 'bold', fontSize: 18 },
+                  headerStyle: { backgroundColor: '#0D9488' },
+                  headerTintColor: '#fff',
+                }}
+              />
+              <Stack.Screen
                 name="prisoners"
                 options={{
                   title: 'Detentos Cadastrados',

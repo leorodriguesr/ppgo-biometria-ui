@@ -5,6 +5,7 @@ import {
   type PrisonerPhotoRow,
   type PrisonerRow,
 } from '@/src/services/database';
+import { getIdentifyMatch } from '@/src/services/identifyMatchStore';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
@@ -22,6 +23,7 @@ export default function IdentifyResultScreen() {
     prisonerId: string;
     distance?: string;
     from?: string;
+    source?: string;
   }>();
   const [prisoner, setPrisoner] = useState<PrisonerRow | null>(null);
   const [photos, setPhotos] = useState<PrisonerPhotoRow[]>([]);
@@ -40,6 +42,13 @@ export default function IdentifyResultScreen() {
     }
     (async () => {
       try {
+        const apiMatch = getIdentifyMatch(prisonerId) ?? (params.source === 'api' ? getIdentifyMatch() : null);
+        if (apiMatch) {
+          setPrisoner(apiMatch.prisoner);
+          setPhotos(apiMatch.photos);
+          return;
+        }
+
         const p = await getPrisonerById(prisonerId);
         setPrisoner(p ?? null);
         if (!p) {
@@ -54,7 +63,7 @@ export default function IdentifyResultScreen() {
         setLoading(false);
       }
     })();
-  }, [prisonerId]);
+  }, [prisonerId, params.source]);
 
   if (loading) {
     return (

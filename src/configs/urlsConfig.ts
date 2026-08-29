@@ -12,17 +12,15 @@ export const ambiente: Ambiente = __DEV__ ? 'HOMO' : 'PROD';
 const URLS_BY_ENV = {
   PROD: {
     SIGUWS: 'https://siguws.ssp.go.gov.br/',
-    LEGADOWS: 'https://legadows.ssp.go.gov.br/',
-    /** Gateway APIs GoiásPen / DGPP (Swagger GOIASPEN_OLD). */
-    DGPPWS: 'https://dgppws.ssp.go.gov.br/',
     SSOWS: 'https://ssows.ssp.go.gov.br/',
+    /** API IntegracaoGoiasPenApp (/api/goiaspenApp). */
+    GOIASPEN: 'https://goiaspen.ssp.go.gov.br/',
   },
   HOMO: {
     SIGUWS: 'https://siguws-h.ssp.go.gov.br/',
-    LEGADOWS: 'https://legadows-h.ssp.go.gov.br/',
-    /** Gateway APIs GoiásPen / DGPP (Swagger GOIASPEN_OLD). */
-    DGPPWS: 'https://dgppws-h.ssp.go.gov.br/',
     SSOWS: 'https://ssows-h.ssp.go.gov.br/',
+    /** API IntegracaoGoiasPenApp (/api/goiaspenApp). */
+    GOIASPEN: 'https://goiaspen-homo.ssp.go.gov.br/',
   },
 } as const;
 

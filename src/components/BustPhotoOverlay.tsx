@@ -1,5 +1,6 @@
+import type { BustPhotoKind } from '@/src/features/photos/types';
 import React, { useEffect } from 'react';
-import { Dimensions, StyleSheet, View } from 'react-native';
+import { Dimensions, Image, StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedProps,
@@ -13,23 +14,36 @@ import Svg, { Defs, Mask, Rect } from 'react-native-svg';
 const { width, height } = Dimensions.get('window');
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
-const FRAME_W = width * 0.72;
-const FRAME_H = height * 0.52;
+const FRAME_W = width * 0.78;
+const FRAME_H = height * 0.58;
 const FRAME_X = (width - FRAME_W) / 2;
-const FRAME_Y = height * 0.14;
+const FRAME_Y = height * 0.12;
+
+const GUIDE_IMAGES: Record<BustPhotoKind, number> = {
+  front: require('@/assets/images/guides/front-overlay.png'),
+  left_profile: require('@/assets/images/guides/right_profile-overlay.png'),
+  right_profile: require('@/assets/images/guides/left_profile-overlay.png'),
+};
 
 interface BustPhotoOverlayProps {
   status: 'red' | 'yellow' | 'green';
-  /** Linha guia cabeça/tronco — desligar em marcas/tatuagens. */
+  kind?: BustPhotoKind | string;
   showMidGuide?: boolean;
 }
 
-/** Moldura de busto (cabeça + tórax) — maior que o círculo da biometria. */
+function asBustKind(kind?: string): BustPhotoKind {
+  if (kind === 'left_profile' || kind === 'right_profile' || kind === 'front') return kind;
+  return 'front';
+}
+
+/** Moldura de busto com silhueta da pose (frente / perfil). */
 export const BustPhotoOverlay: React.FC<BustPhotoOverlayProps> = ({
   status,
+  kind = 'front',
   showMidGuide = true,
 }) => {
   const pulse = useSharedValue(1);
+  const pose = asBustKind(kind);
 
   useEffect(() => {
     if (status === 'green') {
@@ -44,9 +58,10 @@ export const BustPhotoOverlay: React.FC<BustPhotoOverlayProps> = ({
     } else {
       pulse.value = 1;
     }
-  }, [status, pulse]);
+  }, [pulse, status]);
 
-  const color = status === 'green' ? '#00E676' : status === 'yellow' ? '#FFD600' : '#FF1744';
+  const color = status === 'green' ? '#00E676' : status === 'yellow' ? '#FFD600' : '#FFFFFF';
+  const isProfile = pose === 'left_profile' || pose === 'right_profile';
 
   const animatedProps = useAnimatedProps(() => {
     const scale = pulse.value;
@@ -83,17 +98,47 @@ export const BustPhotoOverlay: React.FC<BustPhotoOverlayProps> = ({
         </Defs>
         <Rect height="100%" width="100%" fill="rgba(0,0,0,0.55)" mask="url(#bustMask)" />
         <AnimatedRect fill="transparent" animatedProps={animatedProps} />
-        {showMidGuide ? (
-          <Rect
-            x={FRAME_X + FRAME_W * 0.12}
-            y={FRAME_Y + FRAME_H * 0.5}
-            width={FRAME_W * 0.76}
-            height={1.5}
-            fill={color}
-            opacity={0.45}
-          />
-        ) : null}
       </Svg>
+      {showMidGuide ? (
+        <View style={[styles.guideSlot, isProfile && styles.profileGuideSlot]}>
+          <Image
+            source={GUIDE_IMAGES[pose]}
+            style={[styles.guideImage, { tintColor: color }, isProfile && styles.profileGuideImage]}
+            resizeMode="contain"
+          />
+        </View>
+      ) : null}
     </View>
   );
 };
+
+const styles = StyleSheet.create({
+  guideSlot: {
+    position: 'absolute',
+    left: FRAME_X,
+    top: FRAME_Y,
+    width: FRAME_W,
+    height: FRAME_H,
+    paddingHorizontal: FRAME_W * 0.06,
+    paddingVertical: FRAME_H * 0.04,
+    overflow: 'hidden',
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  guideImage: {
+    width: '100%',
+    height: '100%',
+    opacity: 0.92,
+  },
+  profileGuideSlot: {
+    justifyContent: 'center',
+    paddingTop: FRAME_H * 0.08,
+    paddingBottom: FRAME_H * 0.1,
+  },
+  profileGuideImage: {
+    width: '92%',
+    height: '92%',
+    transform: [{ translateY: FRAME_H * 0.02 }],
+  },
+});
