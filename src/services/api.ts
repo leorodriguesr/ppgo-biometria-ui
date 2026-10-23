@@ -185,7 +185,10 @@ export const validateDetaineePhotoApi = async (
  * Envia a imagem da face para a API e retorna o embedding facial.
  * Em caso de erro (ex.: NO_FACE_DETECTED, ENCODING_FAILED), lança com message adequada.
  */
-export const generateEmbedding = async (photoUri: string): Promise<number[]> => {
+export const generateEmbedding = async (
+    photoUri: string,
+    target?: { apiUrl: string; token: string }
+): Promise<number[]> => {
     const formData = new FormData();
     formData.append('file', {
         uri: photoUri,
@@ -193,13 +196,21 @@ export const generateEmbedding = async (photoUri: string): Promise<number[]> => 
         type: 'image/jpeg',
     } as unknown as Blob);
 
+    const apiUrl = (target?.apiUrl ?? API_URL).replace(/\/$/, '');
+    const headers = target
+        ? {
+              Authorization: `Bearer ${target.token}`,
+              token: target.token,
+          }
+        : await getAuthHeaders();
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s para processamento
 
     try {
-        const response = await fetch(`${API_URL}/generate-embedding`, {
+        const response = await fetch(`${apiUrl}/generate-embedding`, {
             method: 'POST',
-            headers: await getAuthHeaders(),
+            headers,
             body: formData,
             signal: controller.signal,
         });
@@ -208,7 +219,7 @@ export const generateEmbedding = async (photoUri: string): Promise<number[]> => 
         const raw = await response.text();
         if (!response.ok) {
             console.error('[BIOMETRIA] generate-embedding resposta', {
-                url: `${API_URL}/generate-embedding`,
+                url: `${apiUrl}/generate-embedding`,
                 status: response.status,
                 statusText: response.statusText,
                 headers: Object.fromEntries(response.headers.entries()),
@@ -219,7 +230,7 @@ export const generateEmbedding = async (photoUri: string): Promise<number[]> => 
         try {
             data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
         } catch {
-            rejectIfUnauthorized(response.status, raw);
+            if (!target) rejectIfUnauthorized(response.status, raw);
             throw new Error(
                 response.ok
                     ? 'Resposta inválida da API: embedding não encontrado.'
@@ -233,7 +244,7 @@ export const generateEmbedding = async (photoUri: string): Promise<number[]> => 
                 : data;
 
         if (!response.ok) {
-            rejectIfUnauthorized(response.status, errorPayload);
+            if (!target) rejectIfUnauthorized(response.status, errorPayload);
             if (isErrorBody(errorPayload)) {
                 const code = errorPayload.code;
                 if (code === 'SSO_UNAVAILABLE') {

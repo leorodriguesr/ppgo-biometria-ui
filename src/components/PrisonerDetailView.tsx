@@ -11,22 +11,35 @@ import { Image as ExpoImage } from 'expo-image';
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, View, type ImageStyle, type StyleProp } from 'react-native';
 
+function fitToWidth(frameWidth: number, sourceWidth: number, sourceHeight: number) {
+  return {
+    width: frameWidth,
+    height: Math.max(1, Math.round(frameWidth * (sourceHeight / sourceWidth))),
+  };
+}
+
 function Photo({
   uri,
   prisonerId,
   hint,
   style,
+  fit = 'cover',
 }: {
   uri: string | null | undefined;
   prisonerId?: number;
   hint?: string;
   style: StyleProp<ImageStyle>;
+  /** `natural` ocupa a largura do card e a altura segue a foto. */
+  fit?: 'cover' | 'natural';
 }) {
   const [resolved, setResolved] = useState<string | null>(null);
+  const [frameWidth, setFrameWidth] = useState(0);
+  const [sourceSize, setSourceSize] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
     let live = true;
     setResolved(null);
+    setSourceSize(null);
     void resolveLocalPhotoUri(uri, prisonerId, hint).then((value) => {
       if (live) setResolved(value);
     });
@@ -35,8 +48,40 @@ function Photo({
     };
   }, [hint, prisonerId, uri]);
 
-  if (!resolved) return <View style={style} />;
-  return <ExpoImage source={{ uri: resolved }} style={style} contentFit="cover" />;
+  if (fit !== 'natural') {
+    if (!resolved) return <View style={style} />;
+    return <ExpoImage source={{ uri: resolved }} style={style} contentFit="cover" />;
+  }
+
+  const fitted =
+    frameWidth > 0 && sourceSize
+      ? fitToWidth(frameWidth, sourceSize.width, sourceSize.height)
+      : null;
+
+  return (
+    <View
+      style={styles.photoFrame}
+      onLayout={(event) => {
+        const width = event.nativeEvent.layout.width;
+        if (width > 0 && Math.abs(width - frameWidth) > 1) setFrameWidth(width);
+      }}
+    >
+      {resolved ? (
+        <ExpoImage
+          source={{ uri: resolved }}
+          style={[style, fitted ?? styles.naturalFallback]}
+          contentFit="contain"
+          onLoad={(event) => {
+            const width = event.source?.width;
+            const height = event.source?.height;
+            if (width > 0 && height > 0) setSourceSize({ width, height });
+          }}
+        />
+      ) : (
+        <View style={[style, styles.naturalFallback]} />
+      )}
+    </View>
+  );
 }
 
 function field(label: string, value: string | null | undefined) {
@@ -132,7 +177,13 @@ export function PrisonerDetailView({
       {variant === 'api' ? (
         <View style={styles.card}>
           {toDisplayImageUri(prisoner.photo_uri) ? (
-            <Photo uri={prisoner.photo_uri} prisonerId={prisonerId} hint="front" style={styles.heroPhoto} />
+            <Photo
+              uri={prisoner.photo_uri}
+              prisonerId={prisonerId}
+              hint="front"
+              fit="natural"
+              style={styles.heroPhoto}
+            />
           ) : (
             <View style={styles.heroPlaceholder}>
               <ThemedText style={styles.placeholderText}>Sem foto</ThemedText>
@@ -179,7 +230,13 @@ export function PrisonerDetailView({
               Outras fotos
             </ThemedText>
             {galleryUris.map((uri) => (
-              <Photo key={uri} uri={uri} prisonerId={prisonerId} style={styles.galleryPhoto} />
+              <Photo
+                key={uri}
+                uri={uri}
+                prisonerId={prisonerId}
+                fit="natural"
+                style={styles.galleryPhoto}
+              />
             ))}
           </View>
         ) : null
@@ -197,6 +254,7 @@ export function PrisonerDetailView({
                     uri={photo.photo_uri}
                     prisonerId={prisonerId}
                     hint={kind}
+                    fit="natural"
                     style={styles.detaineePhoto}
                   />
                 ) : (
@@ -281,11 +339,16 @@ const styles = StyleSheet.create({
     color: '#0F766E',
     marginBottom: 12,
   },
-  heroPhoto: {
+  photoFrame: {
     width: '100%',
-    height: 280,
+  },
+  heroPhoto: {
     borderRadius: 12,
     backgroundColor: '#F3F4F6',
+  },
+  naturalFallback: {
+    width: '100%',
+    height: 280,
   },
   heroPlaceholder: {
     width: '100%',
@@ -339,16 +402,12 @@ const styles = StyleSheet.create({
     color: '#374151',
   },
   detaineePhoto: {
-    width: '100%',
-    height: 220,
     borderRadius: 12,
-    backgroundColor: '#111827',
+    backgroundColor: '#F3F4F6',
   },
   galleryPhoto: {
-    width: '100%',
-    height: 220,
     borderRadius: 12,
-    backgroundColor: '#111827',
+    backgroundColor: '#F3F4F6',
     marginBottom: 12,
   },
   detaineePlaceholder: {

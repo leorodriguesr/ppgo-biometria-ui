@@ -1,3 +1,4 @@
+import { resolveProdGoiaspenToken } from '@/src/auth/prodTokenStorage';
 import { isUnauthorizedError } from '@/src/auth/unauthorizedSession';
 import { BiometricOverlay } from '@/src/components/BiometricOverlay';
 import { usePendingBiometrics } from '@/src/context/PendingBiometricsContext';
@@ -12,9 +13,15 @@ import {
   getFaceGuide,
   overlayColor,
 } from '@/src/features/biometrics/faceGuide';
+import { ambiente, urlsProd } from '@/src/configs/urlsConfig';
 import { FACE_CAPTURE_ERROR_MESSAGES, generateEmbedding } from '@/src/services/api';
 import { addActivity } from '@/src/services/database';
-import { buscaFacialMelhorMatch, buscaFacialMatches } from '@/src/services/goiaspenAppApi';
+import {
+  buscaFacialMelhorMatch,
+  buscaFacialMatches,
+  type BuscaFacialMatch,
+  type GoiaspenCallTarget,
+} from '@/src/services/goiaspenAppApi';
 import {
   registerParamsFromMatch,
   setFacialSearchPurpose,
@@ -25,6 +32,7 @@ import { USE_LOCAL_DATABASE } from '@/src/configs/runtimeConfig';
 import { buscaFacialMatchesLocal } from '@/src/services/localPrisonerApi';
 import { useFaceDetector } from '@noma4i/vision-camera-face-detector';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -151,7 +159,14 @@ export default function FramedBiometricCapture({ mode }: Props) {
   );
 
   const handleCapturedEmbedding = useCallback(
-    async (uri: string, embedding: number[]): Promise<'done' | 'no_match'> => {
+    async (
+      uri: string,
+      embedding: number[],
+      options?: {
+        keepFile?: boolean;
+        findMatches?: (value: number[]) => Promise<BuscaFacialMatch[]>;
+      }
+    ): Promise<'done' | 'no_match'> => {
       if (mode !== 'identify' && mode !== 'prefill' && mode !== 'update') {
         setPending(uri, embedding);
         successRef.current = true;
@@ -160,11 +175,13 @@ export default function FramedBiometricCapture({ mode }: Props) {
       }
 
       setFacialSearchPurpose(mode);
-      const listed = USE_LOCAL_DATABASE
-        ? await buscaFacialMatchesLocal(embedding)
-        : await buscaFacialMatches(embedding);
+      const listed = options?.findMatches
+        ? await options.findMatches(embedding)
+        : USE_LOCAL_DATABASE
+          ? await buscaFacialMatchesLocal(embedding)
+          : await buscaFacialMatches(embedding);
       let candidates = listed;
-      if (!USE_LOCAL_DATABASE && candidates.length === 0) {
+      if (!options?.findMatches && !USE_LOCAL_DATABASE && candidates.length === 0) {
         const best = await buscaFacialMelhorMatch(embedding);
         if (best) candidates = [best];
       }
@@ -191,7 +208,7 @@ export default function FramedBiometricCapture({ mode }: Props) {
           console.warn('Falha ao registrar atividade:', e);
         }
         successRef.current = true;
-        deleteLocalFiles([uri]);
+        if (!options?.keepFile) deleteLocalFiles([uri]);
         if (mode === 'update') {
           router.dismissTo({
             pathname: '/update-prisoner',
@@ -219,7 +236,7 @@ export default function FramedBiometricCapture({ mode }: Props) {
 
       setIdentifyMatchList(candidates);
       successRef.current = true;
-      deleteLocalFiles([uri]);
+      if (!options?.keepFile) deleteLocalFiles([uri]);
       router.replace({ pathname: '/identify-matches' });
       return 'done';
     },
@@ -357,6 +374,72 @@ export default function FramedBiometricCapture({ mode }: Props) {
     setShotLocked(false);
   };
 
+  const handlePickImage = async () => {
+    if (capturingRef.current || busy) return;
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Fotos', 'Permita o acesso às fotos para selecionar uma imagem.');
+      return;
+    }
+    const picked = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+    });
+    if (picked.canceled || !picked.assets[0]?.uri) return;
+
+    const uri = picked.assets[0].uri;
+    capturingRef.current = true;
+    setShotLocked(true);
+    setBusy(true);
+    setUploading(true);
+    try {
+      const goiaspenToken = await resolveProdGoiaspenToken();
+      if (!goiaspenToken) {
+        Alert.alert(
+          ambiente === 'HOMO' ? 'Token GoiasPen' : 'Sessão',
+          ambiente === 'HOMO'
+            ? 'Abra sua conta na tela inicial e salve o token GoiasPen de produção antes de identificar por imagem.'
+            : 'Entre novamente para identificar por imagem.'
+        );
+        return;
+      }
+      const target: GoiaspenCallTarget = {
+        origin: urlsProd.GOIASPEN,
+        token: goiaspenToken,
+      };
+      const embedding = await generateEmbedding(uri);
+      if (embedding.length !== 512) {
+        throw new Error('Resposta inválida da API: embedding não encontrado.');
+      }
+      const outcome = await handleCapturedEmbedding(uri, embedding, {
+        keepFile: true,
+        findMatches: async (value) => {
+          let candidates = await buscaFacialMatches(value, target);
+          if (candidates.length === 0) {
+            const best = await buscaFacialMelhorMatch(value, target);
+            if (best) candidates = [best];
+          }
+          return candidates;
+        },
+      });
+      if (outcome === 'no_match') {
+        setNoMatchVisible(true);
+      }
+    } catch (error) {
+      console.error('[BIOMETRIA] imagem recusada', error);
+      if (isUnauthorizedError(error)) return;
+      const code = error instanceof Error ? error.message : '';
+      const message =
+        (code && FACE_CAPTURE_ERROR_MESSAGES[code]) ||
+        (error instanceof Error ? error.message : 'Não foi possível usar a imagem.');
+      Alert.alert('Imagem recusada', message, [{ text: 'OK' }]);
+    } finally {
+      capturingRef.current = false;
+      setBusy(false);
+      setUploading(false);
+    }
+  };
+
   const handleNoMatchClose = () => {
     setNoMatchVisible(false);
     router.replace('/(tabs)');
@@ -390,7 +473,9 @@ export default function FramedBiometricCapture({ mode }: Props) {
       : countdown != null
         ? `${countdown}`
         : shotLocked && framing === 'ok'
-          ? 'Toque em Repetir para nova captura'
+          ? mode === 'identify'
+            ? 'Toque em Imagem para escolher uma foto'
+            : 'Toque em Repetir para nova captura'
           : framingMessage(framing);
 
   return (
@@ -447,9 +532,15 @@ export default function FramedBiometricCapture({ mode }: Props) {
         <TouchableOpacity style={styles.textButton} onPress={handleCancel} disabled={busy}>
           <Text style={styles.textButtonLabel}>Cancelar</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.textButton} onPress={handleRetry} disabled={busy}>
-          <Text style={styles.textButtonLabel}>Repetir</Text>
-        </TouchableOpacity>
+        {mode === 'identify' ? (
+          <TouchableOpacity style={styles.textButton} onPress={() => void handlePickImage()} disabled={busy}>
+            <Text style={styles.textButtonLabel}>Imagem</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={styles.textButton} onPress={handleRetry} disabled={busy}>
+            <Text style={styles.textButtonLabel}>Repetir</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );

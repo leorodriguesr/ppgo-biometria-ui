@@ -15,12 +15,15 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#FFCC29",
-        "foregroundImage": "./assets/images/splash-icon.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png"
       },
       "package": "br.gov.go.ppgo.app",
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "output": "static",
@@ -61,6 +64,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "67fc3aad-6f08-48f1-9ad9-e79e3291545e"
+      }
     }
   }
 }

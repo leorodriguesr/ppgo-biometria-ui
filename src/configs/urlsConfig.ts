@@ -36,6 +36,9 @@ const URLS_BY_ENV = {
 
 export const urlsServices = URLS_BY_ENV[ambiente];
 
+/** Endereços de produção, mesmo quando o app está em homologação. */
+export const urlsProd = URLS_BY_ENV.PROD;
+
 /** Redirect cadastrado no client SSO do agenda (web). */
 export const SSO_REDIRECT_URI =
   ambiente === 'PROD' ? `https://${domainNameProd}/` : `https://${domainNameHomo}/`;

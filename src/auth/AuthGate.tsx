@@ -141,8 +141,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
       <View style={styles.loginBody}>
         <View style={styles.hero}>
-          <BrandWordmark size={32} />
-          <Text style={styles.subtitle}>Sistema de identificação prisional</Text>
+          <Text style={styles.appName}>GoiásPen</Text>
+          <BrandWordmark size={22} />
         </View>
 
         {(authData.authError || ssoMessage) && (
@@ -254,7 +254,13 @@ const styles = StyleSheet.create({
   },
   hero: {
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
+  },
+  appName: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#027B8B',
+    textAlign: 'center',
   },
   title: {
     fontSize: 22,
