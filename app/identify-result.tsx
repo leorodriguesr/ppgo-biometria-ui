@@ -5,9 +5,10 @@ import {
   type PrisonerPhotoRow,
   type PrisonerRow,
 } from '@/src/services/database';
+import { USE_LOCAL_DATABASE } from '@/src/configs/runtimeConfig';
 import { getIdentifyMatch } from '@/src/services/identifyMatchStore';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import React, { useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -17,22 +18,49 @@ import {
   View,
 } from 'react-native';
 
+function asParam(value: string | string[] | undefined): string {
+  return (Array.isArray(value) ? value[0] : value)?.trim() ?? '';
+}
+
+function mergeLocalPhotos(
+  prisoner: PrisonerRow,
+  rows: PrisonerPhotoRow[],
+  storedPhotos: PrisonerPhotoRow[]
+): PrisonerPhotoRow[] {
+  const byType = new Map<string, PrisonerPhotoRow>();
+  for (const photo of [...storedPhotos, ...rows]) {
+    const key =
+      photo.photo_type === 'mark' || photo.photo_type === 'tattoo'
+        ? `mark-${photo.id}-${photo.photo_uri}`
+        : photo.photo_type;
+    byType.set(key, photo);
+  }
+  return [...byType.values()];
+}
+
 export default function IdentifyResultScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const params = useLocalSearchParams<{
     prisonerId: string;
-    distance?: string;
     from?: string;
     source?: string;
   }>();
   const [prisoner, setPrisoner] = useState<PrisonerRow | null>(null);
   const [photos, setPhotos] = useState<PrisonerPhotoRow[]>([]);
+  const [galleryUris, setGalleryUris] = useState<string[]>([]);
+  const [variant, setVariant] = useState<'local' | 'api'>('local');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const prisonerId = params.prisonerId;
-  const distance = params.distance != null ? parseFloat(params.distance) : undefined;
-  const fromSearch = params.from === 'search';
+  const prisonerId = asParam(params.prisonerId);
+  const fromSearch = asParam(params.from) === 'search';
+
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: fromSearch ? 'Detento' : 'Preso identificado',
+    });
+  }, [fromSearch, navigation]);
 
   useEffect(() => {
     if (!prisonerId) {
@@ -42,28 +70,43 @@ export default function IdentifyResultScreen() {
     }
     (async () => {
       try {
-        const apiMatch = getIdentifyMatch(prisonerId) ?? (params.source === 'api' ? getIdentifyMatch() : null);
-        if (apiMatch) {
-          setPrisoner(apiMatch.prisoner);
-          setPhotos(apiMatch.photos);
+        const stored = getIdentifyMatch(prisonerId) ?? getIdentifyMatch();
+
+        if (!USE_LOCAL_DATABASE) {
+          if (!stored) {
+            setPrisoner(null);
+            setError('Resultado do GoiásPen não encontrado. Faça a identificação novamente.');
+            return;
+          }
+          setPrisoner(stored.prisoner);
+          setPhotos(stored.photos);
+          setGalleryUris(stored.galleryUris);
+          setVariant('api');
           return;
         }
 
-        const p = await getPrisonerById(prisonerId);
-        setPrisoner(p ?? null);
+        const numericId = Number(prisonerId);
+        const p = await getPrisonerById(
+          Number.isFinite(numericId) && numericId > 0 ? numericId : prisonerId
+        );
         if (!p) {
-          setError('Detento não encontrado.');
+          setPrisoner(null);
+          setError('Detento não encontrado no banco local.');
           return;
         }
         const rows = await getPrisonerPhotos(Number(p.id));
-        setPhotos(rows);
+        const merged = mergeLocalPhotos(p, rows, stored?.photos ?? []);
+        setPrisoner(p);
+        setPhotos(merged);
+        setGalleryUris([]);
+        setVariant('local');
       } catch {
         setError('Erro ao carregar dados.');
       } finally {
         setLoading(false);
       }
     })();
-  }, [prisonerId, params.source]);
+  }, [prisonerId]);
 
   if (loading) {
     return (
@@ -90,12 +133,8 @@ export default function IdentifyResultScreen() {
       <PrisonerDetailView
         prisoner={prisoner}
         photos={photos}
-        badgeTitle={fromSearch ? undefined : 'PRESO IDENTIFICADO'}
-        // badgeSubtitle={
-        //   !fromSearch && distance != null && Number.isFinite(distance)
-        //     ? `Distância: ${distance.toFixed(2)}`
-        //     : undefined
-        // }
+        variant={variant}
+        galleryUris={galleryUris}
       />
 
       <TouchableOpacity

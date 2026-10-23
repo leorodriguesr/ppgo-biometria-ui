@@ -14,6 +14,7 @@ export interface ExtractedPrisonerDocumentData {
     address?: string;
     phone?: string;
     email?: string;
+    sexo?: string;
 }
 
 /** Regex para data no formato DD/MM/AAAA ou DD-MM-AAAA */
@@ -125,6 +126,34 @@ function normalizeCpf(raw: string): string {
     return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
 }
 
+function extractSexo(fullText: string): string | undefined {
+    const lines = fullText.split(/\n/).map((line) => line.trim()).filter(Boolean);
+    const aroundLabel: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+        if (!/\bSEXO\b/i.test(lines[i])) continue;
+        aroundLabel.push(lines[i], lines[i + 1] ?? '', lines[i + 2] ?? '');
+        break;
+    }
+    return pickSexo(aroundLabel.join(' ')) ?? pickSexo(fullText);
+}
+
+function pickSexo(text: string): string | undefined {
+    if (!text.trim()) return undefined;
+    const mascMarked = /MASCULIN[OA].{0,16}(\[[Xx✓]\]|\([Xx]\))|(\[[Xx✓]\]|\([Xx]\)).{0,16}MASCULIN/i.test(text);
+    const femMarked = /FEMININ[OA].{0,16}(\[[Xx✓]\]|\([Xx]\))|(\[[Xx✓]\]|\([Xx]\)).{0,16}FEMININ/i.test(text);
+    if (mascMarked && !femMarked) return 'M';
+    if (femMarked && !mascMarked) return 'F';
+
+    const hasMasc = /MASCULIN/i.test(text);
+    const hasFem = /FEMININ/i.test(text);
+    if (hasMasc && !hasFem) return 'M';
+    if (hasFem && !hasMasc) return 'F';
+
+    const short = text.match(/\bSEXO\b\s*[:.]?\s*([MF])\b/i);
+    if (short?.[1]) return short[1].toUpperCase();
+    return undefined;
+}
+
 function extractCpfHeuristic(lines: string[]): string | undefined {
     const fullText = lines.join(' ');
     const matches = fullText.match(CPF_REGEX);
@@ -147,12 +176,14 @@ export function parseDocumentLines(lines: string[]): ExtractedPrisonerDocumentDa
     const motherName = extractMotherNameHeuristic(lines);
     const dob = extractDobHeuristic(lines);
     const cpf = extractCpfHeuristic(lines);
+    const sexo = extractSexo(fullText);
 
     const result: ExtractedPrisonerDocumentData = {
         ...(name && { name }),
         ...(motherName && { motherName }),
         ...(dob && { dob }),
         ...(cpf && { cpf }),
+        ...(sexo && { sexo }),
     };
 
     for (const { key, pattern } of LABELS) {

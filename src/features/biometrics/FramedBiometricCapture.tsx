@@ -21,6 +21,8 @@ import {
   setIdentifyMatch,
   setIdentifyMatchList,
 } from '@/src/services/identifyMatchStore';
+import { USE_LOCAL_DATABASE } from '@/src/configs/runtimeConfig';
+import { buscaFacialMatchesLocal } from '@/src/services/localPrisonerApi';
 import { useFaceDetector } from '@noma4i/vision-camera-face-detector';
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -46,7 +48,7 @@ import {
 
 const STABLE_MS = 3000;
 
-export type BiometricCaptureMode = 'register' | 'identify' | 'prefill';
+export type BiometricCaptureMode = 'register' | 'identify' | 'prefill' | 'update' | 'update-photo';
 
 type Props = {
   mode: BiometricCaptureMode;
@@ -58,7 +60,7 @@ export default function FramedBiometricCapture({ mode }: Props) {
   const { width, height } = useWindowDimensions();
   const { setPending } = usePendingBiometrics();
   const { hasPermission, requestPermission, canRequestPermission } = useCameraPermission();
-  const device = useCameraDevice('front');
+  const device = useCameraDevice('back');
   const photoOutput = usePhotoOutput({
     quality: 0.85,
     containerFormat: 'jpeg',
@@ -109,6 +111,13 @@ export default function FramedBiometricCapture({ mode }: Props) {
 
   const goBackToRegister = useCallback(
     (photoUri?: string) => {
+      if (mode === 'update-photo') {
+        router.dismissTo({
+          pathname: '/update-prisoner',
+          params: photoUri ? { photo: photoUri } : {},
+        });
+        return;
+      }
       router.replace({
         pathname: '/register',
         params: {
@@ -129,15 +138,21 @@ export default function FramedBiometricCapture({ mode }: Props) {
           prefillAddress: (params.prefillAddress as string) ?? '',
           prefillPhone: (params.prefillPhone as string) ?? '',
           prefillEmail: (params.prefillEmail as string) ?? '',
+          prefillMatchId: (params.prefillMatchId as string) ?? '',
+          prefillSource: (params.prefillSource as string) ?? '',
+          prefillSexo: (params.prefillSexo as string) ?? '',
+          prefillRg: (params.prefillRg as string) ?? '',
+          prefillOrgaoEmissor: (params.prefillOrgaoEmissor as string) ?? '',
+          prefillProntuario: (params.prefillProntuario as string) ?? '',
         },
       });
     },
-    [params, router]
+    [mode, params, router]
   );
 
   const handleCapturedEmbedding = useCallback(
     async (uri: string, embedding: number[]): Promise<'done' | 'no_match'> => {
-      if (mode !== 'identify' && mode !== 'prefill') {
+      if (mode !== 'identify' && mode !== 'prefill' && mode !== 'update') {
         setPending(uri, embedding);
         successRef.current = true;
         goBackToRegister(uri);
@@ -145,8 +160,26 @@ export default function FramedBiometricCapture({ mode }: Props) {
       }
 
       setFacialSearchPurpose(mode);
-      const match = await buscaFacialMelhorMatch(embedding);
-      if (match) {
+      const listed = USE_LOCAL_DATABASE
+        ? await buscaFacialMatchesLocal(embedding)
+        : await buscaFacialMatches(embedding);
+      let candidates = listed;
+      if (!USE_LOCAL_DATABASE && candidates.length === 0) {
+        const best = await buscaFacialMelhorMatch(embedding);
+        if (best) candidates = [best];
+      }
+
+      if (candidates.length === 0) {
+        try {
+          await addActivity({ type: 'identify_fail' });
+        } catch {
+          // ignore
+        }
+        return 'no_match';
+      }
+
+      if (candidates.length === 1) {
+        const match = candidates[0];
         const view = setIdentifyMatch(match);
         try {
           await addActivity({
@@ -159,6 +192,13 @@ export default function FramedBiometricCapture({ mode }: Props) {
         }
         successRef.current = true;
         deleteLocalFiles([uri]);
+        if (mode === 'update') {
+          router.dismissTo({
+            pathname: '/update-prisoner',
+            params: registerParamsFromMatch(match),
+          });
+          return 'done';
+        }
         if (mode === 'prefill') {
           router.replace({
             pathname: '/register',
@@ -170,28 +210,18 @@ export default function FramedBiometricCapture({ mode }: Props) {
           pathname: '/identify-result',
           params: {
             prisonerId: match.id,
-            source: 'api',
+            source: USE_LOCAL_DATABASE ? 'local' : 'api',
             ...(match.distance != null && { distance: String(match.distance) }),
           },
         });
         return 'done';
       }
 
-      const matches = await buscaFacialMatches(embedding);
-      if (matches.length > 0) {
-        setIdentifyMatchList(matches);
-        successRef.current = true;
-        deleteLocalFiles([uri]);
-        router.replace({ pathname: '/identify-matches' });
-        return 'done';
-      }
-
-      try {
-        await addActivity({ type: 'identify_fail' });
-      } catch {
-        // ignore
-      }
-      return 'no_match';
+      setIdentifyMatchList(candidates);
+      successRef.current = true;
+      deleteLocalFiles([uri]);
+      router.replace({ pathname: '/identify-matches' });
+      return 'done';
     },
     [goBackToRegister, mode, router, setPending]
   );
@@ -346,7 +376,7 @@ export default function FramedBiometricCapture({ mode }: Props) {
   if (!device) {
     return (
       <View style={styles.container}>
-        <Text style={styles.errorText}>Câmera frontal indisponível.</Text>
+        <Text style={styles.errorText}>Câmera traseira indisponível.</Text>
       </View>
     );
   }
@@ -380,9 +410,11 @@ export default function FramedBiometricCapture({ mode }: Props) {
           <ActivityIndicator size="large" color="#00E676" />
           <Text style={styles.busyText}>
             {uploading
-              ? mode === 'register'
-                ? 'Salvando biometria...'
-                : 'Consultando o GoiasPen...'
+              ? mode === 'update-photo'
+                ? 'Gerando biometria facial...'
+                : mode === 'register'
+                  ? 'Salvando biometria...'
+                  : 'Consultando o GoiasPen...'
               : 'Capturando foto...'}
           </Text>
         </View>
@@ -395,7 +427,9 @@ export default function FramedBiometricCapture({ mode }: Props) {
             <Text style={styles.modalBody}>
               {mode === 'prefill'
                 ? 'Não encontramos correspondência facial no GoiasPen para preencher o cadastro.'
-                : 'Não encontramos correspondência facial no GoiasPen para este rosto.'}
+                : mode === 'update'
+                  ? 'Não encontramos correspondência facial no GoiasPen para atualizar o preso.'
+                  : 'Não encontramos correspondência facial no GoiasPen para este rosto.'}
             </Text>
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.modalSecondary} onPress={handleNoMatchClose}>

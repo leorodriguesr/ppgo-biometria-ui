@@ -2,12 +2,16 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/src/auth';
 import { BrandWordmark } from '@/src/components/BrandWordmark';
+import { usePendingBiometrics } from '@/src/context/PendingBiometricsContext';
 import {
   clearDatabase,
   getPrisonerById,
   getRecentActivities,
   type ActivityRow,
 } from '@/src/services/database';
+import { clearIdentifyMatches } from '@/src/services/identifyMatchStore';
+import { clearRegisterDraft } from '@/src/services/registerDraftStore';
+import { clearUpdatePrisonerDraft } from '@/src/services/updatePrisonerDraft';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
@@ -66,6 +70,7 @@ function activityMeta(item: ActivityRow): {
 export default function HomeScreen() {
   const router = useRouter();
   const { authData, requestLogout } = useAuth();
+  const { clearPending } = usePendingBiometrics();
   const userName = authData.userLogado.servidor?.nome;
   const [activities, setActivities] = useState<ActivityRow[]>([]);
 
@@ -104,12 +109,30 @@ export default function HomeScreen() {
           style: 'destructive',
           onPress: async () => {
             await clearDatabase();
+            clearRegisterDraft();
+            clearUpdatePrisonerDraft();
+            clearIdentifyMatches();
+            clearPending();
             await loadActivities();
             Alert.alert('Sucesso', 'Banco de dados limpo.');
           },
         },
       ]
     );
+  };
+
+  const startNewRegistration = () => {
+    clearRegisterDraft();
+    clearIdentifyMatches();
+    clearPending();
+    router.push('/register');
+  };
+
+  const startPrisonerUpdate = () => {
+    clearUpdatePrisonerDraft();
+    clearIdentifyMatches();
+    clearPending();
+    router.push('/update-prisoner');
   };
 
   const handleLogout = () => {
@@ -164,14 +187,14 @@ export default function HomeScreen() {
         </TouchableOpacity>
 
         <View style={styles.grid}>
-          <TouchableOpacity style={styles.card} onPress={() => router.push('/register')}>
+          <TouchableOpacity style={styles.card} onPress={startNewRegistration}>
             <Ionicons name="person-add" size={32} color="#007AFF" />
             <ThemedText type="defaultSemiBold">Novo Cadastro</ThemedText>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.card} onPress={() => router.push('/prisoners')}>
-            <Ionicons name="search" size={32} color="#007AFF" />
-            <ThemedText type="defaultSemiBold">Buscar Detento</ThemedText>
+          <TouchableOpacity style={styles.card} onPress={startPrisonerUpdate}>
+            <Ionicons name="sync" size={32} color="#007AFF" />
+            <ThemedText type="defaultSemiBold">Atualizar Biometria</ThemedText>
           </TouchableOpacity>
         </View>
 

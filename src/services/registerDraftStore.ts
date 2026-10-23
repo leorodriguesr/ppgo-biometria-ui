@@ -16,9 +16,13 @@ export type RegisterFormDraft = {
   telefone: string;
   grauInstrucao: string;
   profissao: string;
+  nacionalidade: string;
+  email: string;
   photoUri: string | null;
   localPrisonerId: number | null;
   step: RegisterDraftStep;
+  prefillAppliedKey: string | null;
+  goiaspenReeducandoId: string | null;
 };
 
 const emptyDraft = (): RegisterFormDraft => ({
@@ -37,9 +41,13 @@ const emptyDraft = (): RegisterFormDraft => ({
   telefone: '',
   grauInstrucao: '',
   profissao: '',
+  nacionalidade: '',
+  email: '',
   photoUri: null,
   localPrisonerId: null,
   step: 'dados',
+  prefillAppliedKey: null,
+  goiaspenReeducandoId: null,
 });
 
 /** Rascunho em memória — sobrevive a remount da tela (ex.: volta da câmera). */

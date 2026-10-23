@@ -5,22 +5,28 @@ import { SelectField } from '@/src/components/SelectField';
 import {
   ESTADO_CIVIL_API_OPTIONS,
   GRAU_INSTRUCAO_OPTIONS,
+  NACIONALIDADE_OPTIONS,
   SEXO_OPTIONS,
 } from '@/src/configs/cadastroOptions';
+import { USE_LOCAL_DATABASE } from '@/src/configs/runtimeConfig';
 import { usePendingBiometrics } from '@/src/context/PendingBiometricsContext';
 import {
   BUST_PHOTO_LABELS,
   type BustPhotoKind,
 } from '@/src/features/photos/types';
 import {
-  addPrisoner,
   addActivity,
+  addPrisoner,
   deletePrisonerPhoto,
   getPrisonerById,
   getPrisonerPhotos,
   updatePrisoner,
   type PrisonerPhotoRow,
 } from '@/src/services/database';
+import { atualizaBiometriaFacial } from '@/src/services/goiaspenAppApi';
+import { getIdentifyMatch } from '@/src/services/identifyMatchStore';
+import { persistLocalImage } from '@/src/services/localImageStorage';
+import { persistPrefillBustPhotos } from '@/src/services/persistPrefillPhotos';
 import { submitPreCadastroFromLocal } from '@/src/services/preCadastroMapper';
 import {
   clearRegisterDraft,
@@ -28,15 +34,22 @@ import {
   setRegisterDraft,
   type RegisterFormDraft,
 } from '@/src/services/registerDraftStore';
+import {
+  mapEscolaridadePrefill,
+  mapEstadoCivilPrefill,
+  mapNacionalidadePrefill,
+  mapSexoPrefill,
+} from '@/src/utils/cadastroPrefillMap';
 import { maskCpf, maskDateBr, toDobBr } from '@/src/utils/inputMasks';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
   Image,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -82,7 +95,7 @@ export default function RegisterScreen() {
   const initialDraft = getRegisterDraft();
 
   const [step, setStep] = useState<RegisterStep>(initialDraft?.step ?? 'dados');
-  const [openSection, setOpenSection] = useState<SectionId | null>(null);
+  const [openSection, setOpenSection] = useState<SectionId | null>('identificacao');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(initialDraft?.photoUri ?? null);
@@ -107,6 +120,12 @@ export default function RegisterScreen() {
   const [telefone, setTelefone] = useState(initialDraft?.telefone ?? '');
   const [grauInstrucao, setGrauInstrucao] = useState(initialDraft?.grauInstrucao ?? '');
   const [profissao, setProfissao] = useState(initialDraft?.profissao ?? '');
+  const [nacionalidade, setNacionalidade] = useState(initialDraft?.nacionalidade ?? '');
+  const [email, setEmail] = useState(initialDraft?.email ?? '');
+  const [prefillAppliedKey, setPrefillAppliedKey] = useState(initialDraft?.prefillAppliedKey ?? null);
+  const [goiaspenReeducandoId, setGoiaspenReeducandoId] = useState<string | null>(
+    initialDraft?.goiaspenReeducandoId ?? null
+  );
 
   /** Mantém rascunho em memória para não perder dados ao trocar etapa / remount. */
   useEffect(() => {
@@ -126,9 +145,13 @@ export default function RegisterScreen() {
       telefone,
       grauInstrucao,
       profissao,
+      nacionalidade,
+      email,
       photoUri,
       localPrisonerId,
       step,
+      prefillAppliedKey,
+      goiaspenReeducandoId,
     };
     setRegisterDraft(draft);
   }, [
@@ -147,9 +170,13 @@ export default function RegisterScreen() {
     telefone,
     grauInstrucao,
     profissao,
+    nacionalidade,
+    email,
     photoUri,
     localPrisonerId,
     step,
+    prefillAppliedKey,
+    goiaspenReeducandoId,
   ]);
 
   useEffect(() => {
@@ -185,6 +212,24 @@ export default function RegisterScreen() {
     }
   }, []);
 
+  const importPrefillPhotosIfNeeded = useCallback(
+    async (prisonerId: number) => {
+      const matchId = paramToString(params.prefillMatchId as string | string[] | undefined);
+      const source = paramToString(params.prefillSource as string | string[] | undefined);
+      if (source !== 'face') return;
+      const view =
+        getIdentifyMatch(matchId || undefined) ?? getIdentifyMatch();
+      if (!view?.bustPhotos.length) return;
+      try {
+        await persistPrefillBustPhotos(prisonerId, view.bustPhotos);
+        await reloadDetaineePhotos(prisonerId);
+      } catch (error) {
+        console.warn('Falha ao importar fotos do match:', error);
+      }
+    },
+    [params.prefillMatchId, params.prefillSource, reloadDetaineePhotos]
+  );
+
   useFocusEffect(
     useCallback(() => {
       if (localPrisonerId != null) {
@@ -216,6 +261,8 @@ export default function RegisterScreen() {
     if (row.phone) setTelefone(row.phone);
     if (row.education) setGrauInstrucao(row.education);
     if (row.profession) setProfissao(row.profession);
+    if (row.nationality) setNacionalidade(row.nationality);
+    if (row.email) setEmail(row.email);
     if (row.photo_uri) setPhotoUri(row.photo_uri);
   }, []);
 
@@ -237,20 +284,44 @@ export default function RegisterScreen() {
   }, [localPrisonerId, applyPrisonerRowToForm]);
 
   useEffect(() => {
-    const prefillName = paramToString(params.prefillName as string | string[] | undefined);
-    const prefillMotherName = paramToString(params.prefillMotherName as string | string[] | undefined);
-    const prefillDob = paramToString(params.prefillDob as string | string[] | undefined);
-    const prefillCpf = paramToString(params.prefillCpf as string | string[] | undefined);
+    const prefillMatchId = paramToString(params.prefillMatchId as string | string[] | undefined);
     const prefillSource = paramToString(params.prefillSource as string | string[] | undefined);
-    const prefillSocialName = paramToString(params.prefillSocialName as string | string[] | undefined);
-    const prefillNationality = paramToString(params.prefillNationality as string | string[] | undefined);
-    const prefillMaritalStatus = paramToString(params.prefillMaritalStatus as string | string[] | undefined);
-    const prefillProfession = paramToString(params.prefillProfession as string | string[] | undefined);
-    const prefillEducation = paramToString(params.prefillEducation as string | string[] | undefined);
-    const prefillFiliation = paramToString(params.prefillFiliation as string | string[] | undefined);
-    const prefillAddress = paramToString(params.prefillAddress as string | string[] | undefined);
-    const prefillPhone = paramToString(params.prefillPhone as string | string[] | undefined);
-    const prefillEmail = paramToString(params.prefillEmail as string | string[] | undefined);
+    const stored =
+      prefillSource === 'face'
+        ? getIdentifyMatch(prefillMatchId || undefined) ?? getIdentifyMatch()
+        : prefillMatchId
+          ? getIdentifyMatch(prefillMatchId)
+          : null;
+
+    const prefillName = stored?.prisoner.name ?? paramToString(params.prefillName as string | string[] | undefined);
+    const prefillMotherName =
+      stored?.prisoner.mother_name ?? paramToString(params.prefillMotherName as string | string[] | undefined);
+    const prefillDob = stored?.prisoner.dob ?? paramToString(params.prefillDob as string | string[] | undefined);
+    const prefillCpf = stored?.prisoner.cpf ?? paramToString(params.prefillCpf as string | string[] | undefined);
+    const prefillSocialName =
+      stored?.prisoner.social_name ?? paramToString(params.prefillSocialName as string | string[] | undefined);
+    const prefillSexo = stored?.prisoner.sexo ?? paramToString(params.prefillSexo as string | string[] | undefined);
+    const prefillRg = stored?.prisoner.rg ?? paramToString(params.prefillRg as string | string[] | undefined);
+    const prefillOrgaoEmissor =
+      stored?.prisoner.orgao_emissor ?? paramToString(params.prefillOrgaoEmissor as string | string[] | undefined);
+    const prefillNationality =
+      stored?.prisoner.nationality ?? paramToString(params.prefillNationality as string | string[] | undefined);
+    const prefillMaritalStatus =
+      stored?.prisoner.marital_status ?? paramToString(params.prefillMaritalStatus as string | string[] | undefined);
+    const prefillProfession =
+      stored?.prisoner.profession ?? paramToString(params.prefillProfession as string | string[] | undefined);
+    const prefillEducation =
+      stored?.prisoner.education ?? paramToString(params.prefillEducation as string | string[] | undefined);
+    const prefillBirthPlace =
+      stored?.prisoner.birth_place ?? paramToString(params.prefillBirthPlace as string | string[] | undefined);
+    const prefillFiliation =
+      stored?.prisoner.filiation ?? paramToString(params.prefillFiliation as string | string[] | undefined);
+    const prefillAddress =
+      stored?.prisoner.address ?? paramToString(params.prefillAddress as string | string[] | undefined);
+    const prefillPhone =
+      stored?.prisoner.phone ?? paramToString(params.prefillPhone as string | string[] | undefined);
+    const prefillEmail =
+      stored?.prisoner.email ?? paramToString(params.prefillEmail as string | string[] | undefined);
 
     const hasAny = Boolean(
       prefillName ||
@@ -258,16 +329,24 @@ export default function RegisterScreen() {
         prefillDob ||
         prefillCpf ||
         prefillSocialName ||
+        prefillSexo ||
+        prefillRg ||
+        prefillOrgaoEmissor ||
         prefillNationality ||
         prefillMaritalStatus ||
         prefillProfession ||
         prefillEducation ||
+        prefillBirthPlace ||
         prefillFiliation ||
         prefillAddress ||
         prefillPhone ||
-        prefillEmail
+        prefillEmail ||
+        stored?.bustPhotos.length
     );
     if (!hasAny) return;
+
+    const appliedKey = prefillMatchId || `${prefillSource}:${prefillCpf}:${prefillName}`;
+    if (prefillAppliedKey === appliedKey) return;
 
     if (prefillName) setNome(prefillName);
     if (prefillMotherName) setMae(prefillMotherName);
@@ -280,37 +359,79 @@ export default function RegisterScreen() {
     }
     if (prefillCpf) setCpf(maskCpf(prefillCpf));
     if (prefillSocialName) setNomeSocial(prefillSocialName);
-    if (prefillNationality) setNaturalidade(prefillNationality);
-    if (prefillMaritalStatus) setEstadoCivil(prefillMaritalStatus);
+    if (prefillSexo) setSexo(mapSexoPrefill(prefillSexo));
+    if (prefillRg) setRg(prefillRg);
+    if (prefillOrgaoEmissor) setOrgaoEmissor(prefillOrgaoEmissor);
+    if (prefillBirthPlace) setNaturalidade(prefillBirthPlace);
+    if (prefillNationality) setNacionalidade(mapNacionalidadePrefill(prefillNationality));
+    if (prefillMaritalStatus) setEstadoCivil(mapEstadoCivilPrefill(prefillMaritalStatus));
     if (prefillProfession) setProfissao(prefillProfession);
-    if (prefillEducation) setGrauInstrucao(prefillEducation);
+    if (prefillEducation) setGrauInstrucao(mapEscolaridadePrefill(prefillEducation));
     if (prefillFiliation) setPai(prefillFiliation);
     if (prefillAddress) setEndereco(prefillAddress);
     if (prefillPhone) setTelefone(prefillPhone);
+    if (prefillEmail) setEmail(prefillEmail);
+    if (prefillSource === 'face') {
+      const reeducandoId = stored?.reeducandoId || prefillMatchId;
+      if (reeducandoId) setGoiaspenReeducandoId(reeducandoId);
+    }
+    setPrefillAppliedKey(appliedKey);
+    setOpenSection('identificacao');
+    if (stored?.bustPhotos.length) {
+      setDetaineePhotos(
+        stored.bustPhotos.map((photo, index) => ({
+          id: -(index + 1),
+          prisoner_id: 0,
+          photo_type: photo.kind,
+          body_region: null,
+          body_side: null,
+          photo_uri: photo.uri,
+          quality_ok: 1,
+          created_at: new Date().toISOString(),
+          sinal: null,
+          parte_corpo: null,
+          observacao: null,
+        }))
+      );
+    }
 
     if (prefillSource === 'face') {
-      Alert.alert('Dados preenchidos', 'Dados preenchidos pela pesquisa facial.');
+      Alert.alert(
+        'Preso encontrado',
+        'Os dados foram preenchidos. Este fluxo atualiza o cadastro existente — por ora, apenas a biometria facial.'
+      );
     } else if (prefillSource === 'document') {
       Alert.alert('Dados preenchidos', 'Dados encontrados no documento e preenchidos automaticamente.');
     }
   }, [
+    params.prefillMatchId,
     params.prefillName,
     params.prefillMotherName,
     params.prefillDob,
     params.prefillCpf,
     params.prefillSource,
     params.prefillSocialName,
+    params.prefillSexo,
+    params.prefillRg,
+    params.prefillOrgaoEmissor,
     params.prefillNationality,
     params.prefillMaritalStatus,
     params.prefillProfession,
     params.prefillEducation,
+    params.prefillBirthPlace,
     params.prefillFiliation,
     params.prefillAddress,
     params.prefillPhone,
     params.prefillEmail,
+    prefillAppliedKey,
   ]);
 
   const canSaveBiometria = Boolean(pending && pending.photoUri === photoUri && photoUri);
+  const isFaceUpdate = Boolean(goiaspenReeducandoId);
+
+  useEffect(() => {
+    if (isFaceUpdate && step === 'fotos') setStep('biometria');
+  }, [isFaceUpdate, step]);
 
   const getMissingRequiredFields = (): string[] => {
     const missing: string[] = [];
@@ -371,6 +492,8 @@ export default function RegisterScreen() {
     birthPlace: naturalidade.trim() || undefined,
     address: endereco.trim() || undefined,
     phone: telefone.trim() || undefined,
+    email: email.trim() || undefined,
+    nationality: nacionalidade || undefined,
     sexo: sexo || undefined,
     rg: rg.trim() || undefined,
     orgaoEmissor: orgaoEmissor.trim() || undefined,
@@ -397,11 +520,16 @@ export default function RegisterScreen() {
     }
 
     setIsSubmitting(true);
-    setStatusMessage('Salvando dados localmente...');
+    setStatusMessage(isFaceUpdate ? 'Abrindo biometria...' : 'Salvando dados localmente...');
     try {
+      if (isFaceUpdate) {
+        setStep('biometria');
+        return;
+      }
       const fields = buildLocalFields();
-      if (localPrisonerId != null) {
-        await updatePrisoner(localPrisonerId, fields);
+      let savedId = localPrisonerId;
+      if (savedId != null) {
+        await updatePrisoner(savedId, fields);
       } else {
         const id = await addPrisoner(
           fields.name,
@@ -419,12 +547,18 @@ export default function RegisterScreen() {
             birthPlace: fields.birthPlace,
             address: fields.address,
             phone: fields.phone,
+            email: fields.email,
+            nationality: fields.nationality,
             sexo: fields.sexo,
             rg: fields.rg,
             orgaoEmissor: fields.orgaoEmissor,
           }
         );
-        setLocalPrisonerId(Number(id));
+        savedId = Number(id);
+      }
+      if (savedId != null) {
+        await importPrefillPhotosIfNeeded(savedId);
+        setLocalPrisonerId(savedId);
       }
       setStep('biometria');
     } catch (error) {
@@ -443,6 +577,8 @@ export default function RegisterScreen() {
       params: {
         mode: 'register',
         draftPrisonerId: localPrisonerId != null ? String(localPrisonerId) : '',
+        prefillMatchId: goiaspenReeducandoId ?? '',
+        prefillSource: goiaspenReeducandoId ? 'face' : '',
         prefillName: nome,
         prefillMotherName: mae,
         prefillDob: dataNascimento,
@@ -477,6 +613,49 @@ export default function RegisterScreen() {
       return;
     }
 
+    if (isFaceUpdate && goiaspenReeducandoId) {
+      setIsSubmitting(true);
+      setStatusMessage('Atualizando biometria facial...');
+      try {
+        if (USE_LOCAL_DATABASE) {
+          const localId = Number(goiaspenReeducandoId);
+          if (!Number.isFinite(localId)) throw new Error('ID local inválido.');
+          const persistedPhoto = await persistLocalImage(
+            photoUri,
+            localId,
+            'biometria'
+          );
+          await updatePrisoner(localId, {
+            photoUri: persistedPhoto,
+            faceEmbeddingJson: JSON.stringify(pending.embedding),
+          });
+        } else {
+          await atualizaBiometriaFacial(goiaspenReeducandoId, pending.embedding);
+        }
+        clearPending();
+        Alert.alert('Biometria atualizada', 'A biometria facial do preso foi atualizada.', [
+          {
+            text: 'OK',
+            onPress: () => {
+              clearRegisterDraft();
+              router.replace('/(tabs)');
+            },
+          },
+        ]);
+      } catch (error) {
+        console.error('[CADASTRO] Falha ao atualizar biometria:', error);
+        if (isUnauthorizedError(error)) return;
+        Alert.alert(
+          'Erro ao atualizar',
+          error instanceof Error ? error.message : 'Não foi possível atualizar a biometria facial.'
+        );
+      } finally {
+        setIsSubmitting(false);
+        setStatusMessage('');
+      }
+      return;
+    }
+
     const draftFromParams = Number(
       paramToString(params.draftPrisonerId as string | string[] | undefined)
     );
@@ -491,10 +670,15 @@ export default function RegisterScreen() {
       let savedId = prisonerId;
 
       if (prisonerId != null) {
+        const persistedPhoto = await persistLocalImage(
+          photoUri,
+          prisonerId,
+          'biometria'
+        );
         // Dados já foram salvos antes da captura; só anexa foto + embedding
         // (o estado do form pode ter sido perdido no remount ao voltar da câmera)
         await updatePrisoner(prisonerId, {
-          photoUri,
+          photoUri: persistedPhoto,
           faceEmbeddingJson: embeddingJson,
         });
         savedId = prisonerId;
@@ -516,12 +700,16 @@ export default function RegisterScreen() {
             birthPlace: fields.birthPlace,
             address: fields.address,
             phone: fields.phone,
+            email: fields.email,
+            nationality: fields.nationality,
             sexo: fields.sexo,
             rg: fields.rg,
             orgaoEmissor: fields.orgaoEmissor,
           }
         );
         savedId = Number(id);
+        const persistedPhoto = await persistLocalImage(photoUri, savedId, 'biometria');
+        await updatePrisoner(savedId, { photoUri: persistedPhoto });
       } else {
         Alert.alert(
           'Dados pendentes',
@@ -534,7 +722,10 @@ export default function RegisterScreen() {
       setLocalPrisonerId(savedId);
       clearPending();
       setStep('fotos');
-      if (savedId != null) void reloadDetaineePhotos(savedId);
+      if (savedId != null) {
+        await importPrefillPhotosIfNeeded(savedId);
+        await reloadDetaineePhotos(savedId);
+      }
     } catch (error) {
       console.error('[CADASTRO] Falha ao salvar biometria:', error);
       if (isUnauthorizedError(error)) return;
@@ -611,7 +802,9 @@ export default function RegisterScreen() {
     }
 
     setIsSubmitting(true);
-    setStatusMessage('Preparando pré-cadastro...');
+    setStatusMessage(
+      USE_LOCAL_DATABASE ? 'Concluindo cadastro local...' : 'Preparando pré-cadastro...'
+    );
     try {
       const row = await getPrisonerById(localPrisonerId);
       if (!row) throw new Error('Rascunho local não encontrado.');
@@ -623,11 +816,13 @@ export default function RegisterScreen() {
       const prisoner = (await getPrisonerById(localPrisonerId)) ?? row;
       const photos = await getPrisonerPhotos(localPrisonerId);
 
-      await submitPreCadastroFromLocal({
-        prisoner,
-        photos,
-        onProgress: setStatusMessage,
-      });
+      if (!USE_LOCAL_DATABASE) {
+        await submitPreCadastroFromLocal({
+          prisoner,
+          photos,
+          onProgress: setStatusMessage,
+        });
+      }
 
       const prisonerName = nome.trim() || prisoner.name?.trim() || undefined;
       await addActivity({
@@ -636,7 +831,12 @@ export default function RegisterScreen() {
         prisonerName,
       });
 
-      Alert.alert('Sucesso', 'Pré-cadastro enviado com sucesso.', [
+      Alert.alert(
+        'Sucesso',
+        USE_LOCAL_DATABASE
+          ? 'Pré-cadastro salvo com sucesso.'
+          : 'Pré-cadastro enviado com sucesso.',
+        [
         {
           text: 'OK',
           onPress: () => {
@@ -644,13 +844,16 @@ export default function RegisterScreen() {
             router.replace('/(tabs)');
           },
         },
-      ]);
+        ]
+      );
     } catch (error) {
       console.error('[CADASTRO] Falha no pré-cadastro:', error);
       if (isUnauthorizedError(error)) return;
       Alert.alert(
-        'Erro no pré-cadastro',
-        'Não foi possível enviar o pré-cadastro. O rascunho local foi mantido. Veja o detalhe no terminal.'
+        USE_LOCAL_DATABASE ? 'Erro no cadastro' : 'Erro no pré-cadastro',
+        USE_LOCAL_DATABASE
+          ? 'Não foi possível concluir o cadastro local.'
+          : 'Não foi possível enviar o pré-cadastro. O rascunho local foi mantido. Veja o detalhe no terminal.'
       );
     } finally {
       setIsSubmitting(false);
@@ -659,15 +862,37 @@ export default function RegisterScreen() {
   };
 
   const goToFotos = () => {
-    if (localPrisonerId == null && !canSaveBiometria) {
+    if (isFaceUpdate) {
+      Alert.alert(
+        'Fotos indisponíveis',
+        'Ao encontrar o preso pela biometria, por ora só é possível atualizar a biometria facial.'
+      );
+      return;
+    }
+
+    if (step === 'dados') {
+      const missing = getMissingRequiredFields();
+      if (missing.length > 0) {
+        const message =
+          missing.length === 1
+            ? `Falta preencher: ${missing[0]}.`
+            : `Faltam preencher:\n• ${missing.join('\n• ')}`;
+        Alert.alert('Campos obrigatórios', message);
+        openSectionForMissingFields(missing);
+        return;
+      }
+    }
+
+    const biometriaSalva = Boolean(localPrisonerId != null && photoUri && !canSaveBiometria);
+    if (!biometriaSalva) {
+      if (step === 'dados') {
+        Alert.alert('Etapa anterior', 'Conclua a biometria antes de abrir as fotos.');
+        return;
+      }
       Alert.alert('Biometria pendente', 'Salve a biometria facial antes de continuar.');
-      setStep('biometria');
       return;
     }
-    if (canSaveBiometria) {
-      void handleSave();
-      return;
-    }
+
     setStep('fotos');
   };
 
@@ -692,18 +917,67 @@ export default function RegisterScreen() {
         </Text>
       </TouchableOpacity>
       <TouchableOpacity
-        style={[styles.tabButton, step === 'fotos' && styles.tabButtonActive]}
+        style={[
+          styles.tabButton,
+          step === 'fotos' && styles.tabButtonActive,
+          isFaceUpdate && styles.tabButtonDisabled,
+        ]}
         onPress={goToFotos}
+        disabled={isFaceUpdate}
       >
-        <Text style={[styles.tabButtonText, step === 'fotos' && styles.tabButtonTextActive]}>
+        <Text
+          style={[
+            styles.tabButtonText,
+            step === 'fotos' && styles.tabButtonTextActive,
+            isFaceUpdate && styles.tabButtonTextDisabled,
+          ]}
+        >
           3. Fotos
         </Text>
       </TouchableOpacity>
     </View>
   );
 
+  const headerOptions = useMemo(
+    () => ({
+      gestureEnabled: step === 'dados',
+      headerBackVisible: false,
+      headerLeft: ({ tintColor }: { tintColor?: string }) => (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Voltar"
+          hitSlop={{ top: 14, bottom: 14, left: 10, right: 14 }}
+          onPress={() => {
+            if (step === 'fotos') {
+              setStep('biometria');
+              return;
+            }
+            if (step === 'biometria') {
+              void goBackToDados();
+              return;
+            }
+            router.dismissAll();
+          }}
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            minHeight: 22,
+            marginLeft: -6,
+            paddingRight: 8,
+          }}
+        >
+          <Ionicons name="chevron-back" size={28} color={tintColor ?? '#fff'} />
+          <Text style={{ color: tintColor ?? '#fff', fontSize: 17 }}>Voltar</Text>
+        </Pressable>
+      ),
+    }),
+    [goBackToDados, router, step]
+  );
+
   return (
-    step === 'fotos' ? (
+    <>
+      <Stack.Screen options={headerOptions} />
+      {step === 'fotos' ? (
       <View style={styles.fotosScreen}>
         <ScrollView
           style={styles.fotosScroll}
@@ -850,29 +1124,32 @@ export default function RegisterScreen() {
 
         <View style={styles.fotosFooter}>
           {statusMessage ? <Text style={styles.statusHint}>{statusMessage}</Text> : null}
-          <TouchableOpacity
-            style={[
-              styles.primaryButton,
-              styles.fotosFooterBtn,
-              (!requiredPhotosOk || isSubmitting) && styles.primaryButtonDisabled,
-            ]}
-            onPress={finishCadastro}
-            disabled={!requiredPhotosOk || isSubmitting}
-            activeOpacity={0.8}
-          >
-            {isSubmitting ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text
-                style={[
-                  styles.primaryButtonText,
-                  !requiredPhotosOk && styles.primaryButtonTextDisabled,
-                ]}
-              >
-                Enviar pré-cadastro
-              </Text>
-            )}
-          </TouchableOpacity>
+          <View style={styles.footerActions}>
+            <TouchableOpacity
+              style={[
+                styles.primaryButton,
+                styles.footerActionBtn,
+                (!requiredPhotosOk || isSubmitting) && styles.primaryButtonDisabled,
+              ]}
+              onPress={finishCadastro}
+              disabled={!requiredPhotosOk || isSubmitting}
+              activeOpacity={0.8}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text
+                  style={[
+                    styles.primaryButtonText,
+                    styles.footerActionText,
+                    !requiredPhotosOk && styles.primaryButtonTextDisabled,
+                  ]}
+                >
+                  Enviar pré-cadastro
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     ) : step === 'dados' ? (
@@ -885,21 +1162,43 @@ export default function RegisterScreen() {
           {renderTabs()}
 
           <View style={styles.form}>
-            <View style={styles.topActions}>
-              <TouchableOpacity
-                style={[styles.topActionButton, styles.topActionButtonSecondary]}
-                onPress={handleFacePrefill}
-                accessibilityLabel="Pesquisar por biometria facial"
-              >
-                <Ionicons name="scan" size={24} color="#fff" />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.topActionButton}
-                onPress={handleDocumentScan}
-                accessibilityLabel="Ler documento"
-              >
-                <Ionicons name="document-text" size={24} color="#fff" />
-              </TouchableOpacity>
+            <View style={styles.quickActions}>
+              <View>
+                <ThemedText type="defaultSemiBold" style={styles.quickActionsTitle}>
+                  Preenchimento rápido
+                </ThemedText>
+                <Text style={styles.quickActionsSubtitle}>
+                  Busque um cadastro ou extraia os dados do documento
+                </Text>
+              </View>
+              <View style={styles.quickActionsRow}>
+               
+                <TouchableOpacity
+                  style={[styles.quickActionCard, styles.documentActionCard]}
+                  onPress={handleDocumentScan}
+                  accessibilityRole="button"
+                  accessibilityLabel="Escanear documento"
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.faceScanIcon}>
+                    <Ionicons name="document-text" size={26} color="#B45309" />
+                  </View>
+                  <Text style={[styles.quickActionTitle, styles.documentActionTitle]}>{`Guia de\nRecolhimento`}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.quickActionCard, styles.faceActionCard]}
+                  onPress={handleFacePrefill}
+                  accessibilityRole="button"
+                  accessibilityLabel="Buscar cadastro por reconhecimento facial"
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.faceScanIcon}>
+                    <Ionicons name="scan-outline" size={32} color="#6D28D9" />
+                    <Ionicons name="person" size={14} color="#6D28D9" style={styles.faceScanPerson} />
+                  </View>
+                  <Text style={[styles.quickActionTitle, styles.faceActionTitle]}>{`Busca por\nfacial`}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             <FormSectionCard
@@ -908,9 +1207,8 @@ export default function RegisterScreen() {
               icon="person-outline"
               open={openSection === 'identificacao'}
               onToggle={() => toggleSection('identificacao')}
-              requiredHint
             >
-              <ThemedText type="defaultSemiBold">Nome Completo *</ThemedText>
+              <ThemedText type="defaultSemiBold">Nome Completo</ThemedText>
               <TextInput
                 style={styles.input}
                 value={nome}
@@ -929,14 +1227,14 @@ export default function RegisterScreen() {
               />
 
               <SelectField
-                label="Sexo *"
+                label="Sexo"
                 value={sexo}
                 options={SEXO_OPTIONS}
                 onChange={setSexo}
                 allowEmpty={false}
               />
 
-              <ThemedText type="defaultSemiBold">Nome da Mãe *</ThemedText>
+              <ThemedText type="defaultSemiBold">Nome da Mãe</ThemedText>
               <TextInput
                 style={styles.input}
                 value={mae}
@@ -954,7 +1252,7 @@ export default function RegisterScreen() {
                 placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
               />
 
-              <ThemedText type="defaultSemiBold">Data de Nascimento *</ThemedText>
+              <ThemedText type="defaultSemiBold">Data de Nascimento</ThemedText>
               <TextInput
                 style={styles.input}
                 value={dataNascimento}
@@ -976,6 +1274,13 @@ export default function RegisterScreen() {
               />
 
               <SelectField
+                label="Nacionalidade"
+                value={nacionalidade}
+                options={NACIONALIDADE_OPTIONS}
+                onChange={setNacionalidade}
+              />
+
+              <SelectField
                 label="Estado Civil"
                 value={estadoCivil}
                 options={ESTADO_CIVIL_API_OPTIONS}
@@ -989,9 +1294,8 @@ export default function RegisterScreen() {
               icon="id-card-outline"
               open={openSection === 'documentos'}
               onToggle={() => toggleSection('documentos')}
-              requiredHint
             >
-              <ThemedText type="defaultSemiBold">CPF *</ThemedText>
+              <ThemedText type="defaultSemiBold">CPF</ThemedText>
               <TextInput
                 style={styles.input}
                 value={cpf}
@@ -1046,6 +1350,17 @@ export default function RegisterScreen() {
                 keyboardType="phone-pad"
                 placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
               />
+
+              <ThemedText type="defaultSemiBold">E-mail</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={email}
+                onChangeText={setEmail}
+                placeholder="email@exemplo.com"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                placeholderTextColor={INPUT_PLACEHOLDER_COLOR}
+              />
             </FormSectionCard>
 
             <FormSectionCard
@@ -1074,30 +1389,39 @@ export default function RegisterScreen() {
           </View>
         </ScrollView>
 
-        <View style={styles.fixedFooter}>
+        <View style={styles.fotosFooter}>
           {statusMessage ? <Text style={styles.statusHint}>{statusMessage}</Text> : null}
-          <TouchableOpacity
-            style={[styles.primaryButton, styles.fixedFooterBtn, isSubmitting && styles.primaryButtonDisabled]}
-            onPress={goToBiometria}
-            disabled={isSubmitting}
-            activeOpacity={0.8}
-          >
-            {isSubmitting ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Salvar e ir para biometria</Text>
-            )}
-          </TouchableOpacity>
+          <View style={styles.footerActions}>
+            <TouchableOpacity
+              style={[
+                styles.primaryButton,
+                styles.footerActionBtn,
+                isSubmitting && styles.primaryButtonDisabled,
+              ]}
+              onPress={goToBiometria}
+              disabled={isSubmitting}
+              activeOpacity={0.8}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={[styles.primaryButtonText, styles.footerActionText]}>
+                  {isFaceUpdate ? 'Ir para biometria' : 'Salvar e ir para biometria'}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     ) : (
-      <ScrollView
-        contentContainerStyle={[styles.container, styles.containerBiometry]}
-        keyboardShouldPersistTaps="handled"
-      >
-        {renderTabs()}
+      <View style={styles.fotosScreen}>
+        <ScrollView
+          style={styles.fotosScroll}
+          contentContainerStyle={[styles.fotosScrollContent, styles.biometryScrollContent]}
+          keyboardShouldPersistTaps="handled"
+        >
+          {renderTabs()}
 
-        <View style={styles.biometryStepWrapper}>
           <View style={styles.biometryCenter}>
             <View style={styles.photoContainer}>
               {photoUri ? (
@@ -1114,45 +1438,40 @@ export default function RegisterScreen() {
               </TouchableOpacity>
             </View>
           </View>
+        </ScrollView>
 
-          <View style={styles.biometryBottom}>
-            {isSubmitting ? (
-              <View style={{ alignItems: 'center', gap: 10 }}>
-                <ActivityIndicator size="large" color="#0D9488" />
-                <Text style={{ color: '#666' }}>{statusMessage}</Text>
-              </View>
-            ) : (
-              <>
-                <TouchableOpacity
-                  style={styles.secondaryButton}
-                  onPress={() => {
-                    void goBackToDados();
-                  }}
-                  activeOpacity={0.8}
+        <View style={styles.fotosFooter}>
+          {statusMessage ? <Text style={styles.statusHint}>{statusMessage}</Text> : null}
+          <View style={styles.footerActions}>
+            <TouchableOpacity
+              style={[
+                styles.primaryButton,
+                styles.footerActionBtn,
+                (!canSaveBiometria || isSubmitting) && styles.primaryButtonDisabled,
+              ]}
+              onPress={handleSave}
+              disabled={!canSaveBiometria || isSubmitting}
+              activeOpacity={0.8}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text
+                  style={[
+                    styles.primaryButtonText,
+                    styles.footerActionText,
+                    !canSaveBiometria && styles.primaryButtonTextDisabled,
+                  ]}
                 >
-                  <Text style={styles.secondaryButtonText}>Voltar para dados</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.primaryButton, !canSaveBiometria && styles.primaryButtonDisabled]}
-                  onPress={handleSave}
-                  disabled={!canSaveBiometria}
-                  activeOpacity={0.8}
-                >
-                  <Text
-                    style={[
-                      styles.primaryButtonText,
-                      !canSaveBiometria && styles.primaryButtonTextDisabled,
-                    ]}
-                  >
-                    Salvar biometria e avançar
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
+                  {isFaceUpdate ? 'Atualizar biometria' : 'Salvar biometria e avançar'}
+                </Text>
+              )}
+            </TouchableOpacity>
           </View>
         </View>
-      </ScrollView>
-    )
+      </View>
+    )}
+    </>
   );
 }
 
@@ -1161,10 +1480,6 @@ const styles = StyleSheet.create({
     padding: 20,
     backgroundColor: '#F2F2F7',
     flexGrow: 1,
-  },
-  containerBiometry: {
-    flexGrow: 1,
-    minHeight: Dimensions.get('window').height - 120,
   },
   tabs: {
     flexDirection: 'row',
@@ -1193,12 +1508,15 @@ const styles = StyleSheet.create({
   tabButtonTextActive: {
     color: '#fff',
   },
+  tabButtonDisabled: {
+    opacity: 0.45,
+  },
+  tabButtonTextDisabled: {
+    color: '#9CA3AF',
+  },
   photoContainer: {
     alignItems: 'center',
     marginBottom: 20,
-  },
-  biometryStepWrapper: {
-    flex: 1,
   },
   biometryCenter: {
     flex: 1,
@@ -1206,22 +1524,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     minHeight: 280,
   },
-  biometryBottom: {
-    marginTop: 24,
-    paddingBottom: 8,
-    gap: 10,
-  },
   photo: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
+    width: 180,
+    height: 180,
+    borderRadius: 16,
     marginBottom: 10,
+    backgroundColor: '#E5E7EB',
   },
   photoPlaceholder: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: '#e1e1e1',
+    width: 180,
+    height: 180,
+    borderRadius: 16,
+    backgroundColor: '#E5E7EB',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 10,
@@ -1247,22 +1561,68 @@ const styles = StyleSheet.create({
   form: {
     gap: 12,
   },
-  topActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
+  quickActions: {
+    gap: 10,
     marginBottom: 4,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  topActionButton: {
-    width: 48,
-    height: 48,
+  quickActionsTitle: {
+    color: '#0F172A',
+    fontSize: 16,
+  },
+  quickActionsSubtitle: {
+    color: '#64748B',
+    fontSize: 13,
+    marginTop: 2,
+  },
+  quickActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: 8,
+  },
+  quickActionCard: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 12,
-    backgroundColor: '#F59E0B',
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  faceActionCard: {
+    backgroundColor: '#F5F3FF',
+    borderColor: '#DDD6FE',
+  },
+  documentActionCard: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  faceScanIcon: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  topActionButtonSecondary: {
-    backgroundColor: '#7C3AED',
+  faceScanPerson: {
+    position: 'absolute',
+  },
+  quickActionTitle: {
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '800',
+    flexShrink: 1,
+  },
+  faceActionTitle: {
+    color: '#6D28D9',
+  },
+  documentActionTitle: {
+    color: '#B45309',
   },
   primaryButton: {
     backgroundColor: '#007AFF',
@@ -1270,7 +1630,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 8,
+    marginTop: 4,
     alignSelf: 'stretch',
   },
   primaryButtonText: {
@@ -1298,6 +1658,22 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 15,
     fontWeight: '600',
+    textAlign: 'center',
+  },
+  footerActions: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
+  footerActionBtn: {
+    flex: 1,
+    marginTop: 0,
+    paddingVertical: 14,
+    paddingHorizontal: 8,
+  },
+  footerActionText: {
+    fontSize: 14,
+    textAlign: 'center',
   },
   input: {
     backgroundColor: '#F9FAFB',
@@ -1327,17 +1703,6 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 16,
   },
-  fixedFooter: {
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 20,
-    backgroundColor: '#F2F2F7',
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-  },
-  fixedFooterBtn: {
-    marginTop: 0,
-  },
   fotosScreen: {
     flex: 1,
     backgroundColor: '#F2F2F7',
@@ -1349,6 +1714,9 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 16,
   },
+  biometryScrollContent: {
+    flexGrow: 1,
+  },
   fotosFooter: {
     paddingHorizontal: 20,
     paddingTop: 10,
@@ -1356,9 +1724,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#F2F2F7',
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
-  },
-  fotosFooterBtn: {
-    marginTop: 0,
   },
   timeline: {
     flexDirection: 'row',

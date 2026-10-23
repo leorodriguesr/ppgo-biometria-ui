@@ -2,10 +2,10 @@
  * Temporário: reutiliza o client SSO do agenda até o biometria ter ambiente próprio.
  * Fonte: ppgo-agendaac4/src/configs/sistemaConfig.js
  */
-export const sistemaNameSSO = 'ppgoagendaac4';
+export const sistemaNameSSO = 'goiaspen';
 
-export const domainNameProd = 'ppgoagendaac4.ssp.go.gov.br';
-export const domainNameHomo = 'ppgoagendaac4-homo.ssp.go.gov.br';
+export const domainNameProd = 'goiaspen.ssp.go.gov.br';
+export const domainNameHomo = 'goiaspen-homo.ssp.go.gov.br';
 export const domainNameDesv = 'localhost';
 
 export const perfisSistema = {

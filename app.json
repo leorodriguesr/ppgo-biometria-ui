@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "ppgo-goiaspen-app",
+    "name": "Goiaspen App",
     "slug": "ppgo-goiaspen-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/logopp.png",
+    "icon": "./assets/images/icon.png",
     "scheme": "ppgogoiaspenapp",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
@@ -14,8 +14,8 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#F5C518",
-        "foregroundImage": "./assets/images/logopp.png",
+        "backgroundColor": "#FFCC29",
+        "foregroundImage": "./assets/images/splash-icon.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "package": "br.gov.go.ppgo.app",
@@ -31,7 +31,7 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/logopp.png",
+          "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",

@@ -1,15 +1,28 @@
 import { getAuthHeaders } from '@/src/auth/AuthApi';
 import { rejectIfUnauthorized } from '@/src/auth/unauthorizedSession';
+import { USE_LOCAL_BIOMETRIA_API } from '@/src/configs/runtimeConfig';
+import { urlsServices } from '@/src/configs/urlsConfig';
 
-// Python: geração de embedding 512 (face → vetor)
-export const API_URL = 'http://192.168.1.4:8000';     // device físico / mesma Wi-Fi
-// export const API_URL = 'http://localhost:8000';      // iOS Simulator
-// export const API_URL = 'http://10.0.2.2:8000';       // Android Emulator
+function httpBase(value: string | undefined, fallback: string): string {
+  const chosen = (value ?? '').trim() || fallback.trim();
+  return chosen.replace(/\/$/, '');
+}
 
-// Java: recebe embedding, compara no banco, retorna resultado
-export const JAVA_API_URL = 'http://192.168.1.4:8080';
-// export const JAVA_API_URL = 'http://localhost:8080';   // iOS Simulator
-// export const JAVA_API_URL = 'http://10.0.2.2:8080';   // Android Emulator
+const LOCAL_BIOMETRIA_API_URL = httpBase(
+  process.env.EXPO_PUBLIC_BIOMETRIA_API_URL,
+  'http://172.20.10.5:8000'
+);
+
+/** Python: embedding e qualidade de foto. */
+export const API_URL = USE_LOCAL_BIOMETRIA_API
+  ? LOCAL_BIOMETRIA_API_URL
+  : httpBase(urlsServices.BIOMETRIA, '');
+
+/** Java /identify legado. Não entra no fluxo GoiásPen. */
+export const JAVA_API_URL = httpBase(
+  process.env.EXPO_PUBLIC_JAVA_API_URL,
+  __DEV__ ? 'http://192.168.1.4:8080' : ''
+);
 
 /** Resposta de sucesso do endpoint /generate-embedding (API retorna também modelVersion, embeddingSize) */
 export interface GenerateEmbeddingSuccess {
@@ -193,6 +206,15 @@ export const generateEmbedding = async (photoUri: string): Promise<number[]> => 
         clearTimeout(timeoutId);
 
         const raw = await response.text();
+        if (!response.ok) {
+            console.error('[BIOMETRIA] generate-embedding resposta', {
+                url: `${API_URL}/generate-embedding`,
+                status: response.status,
+                statusText: response.statusText,
+                headers: Object.fromEntries(response.headers.entries()),
+                body: raw,
+            });
+        }
         let data: Record<string, unknown> = {};
         try {
             data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
@@ -214,6 +236,11 @@ export const generateEmbedding = async (photoUri: string): Promise<number[]> => 
             rejectIfUnauthorized(response.status, errorPayload);
             if (isErrorBody(errorPayload)) {
                 const code = errorPayload.code;
+                if (code === 'SSO_UNAVAILABLE') {
+                    throw new Error(
+                        'Não foi possível validar o login no SSO. Tente novamente em instantes.'
+                    );
+                }
                 if (
                     code === 'NO_FACE_DETECTED' ||
                     code === 'MULTIPLE_FACES' ||

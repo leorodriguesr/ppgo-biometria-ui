@@ -210,6 +210,13 @@ export async function listarTiposSinal(): Promise<TipoSinalDTO[]> {
   return Array.isArray(data) ? data : [];
 }
 
+export type BuscaFacialFotoKind = 'front' | 'right_profile' | 'left_profile';
+
+export type BuscaFacialFoto = {
+  uri: string;
+  kind?: BuscaFacialFotoKind;
+};
+
 export type BuscaFacialMatch = {
   id: string;
   nome: string;
@@ -230,6 +237,9 @@ export type BuscaFacialMatch = {
   telefone?: string;
   email?: string;
   fotoUrl?: string;
+  fotos?: string[];
+  fotosDetalhe?: BuscaFacialFoto[];
+  prontuario?: string;
   distance?: number;
 };
 
@@ -238,6 +248,207 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return value as Record<string, unknown>;
   }
   return null;
+}
+
+function asAbsoluteUrl(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return undefined;
+  if (
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('file:')
+  ) {
+    return trimmed;
+  }
+  if (trimmed.length > 80 && /^[A-Za-z0-9+/=\s]+$/.test(trimmed) && !trimmed.includes('://')) {
+    const compact = trimmed.replace(/\s/g, '');
+    const mime = compact.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+    return `data:${mime};base64,${compact}`;
+  }
+  if (trimmed.startsWith('/')) {
+    return `${urlsServices.GOIASPEN.replace(/\/$/, '')}${trimmed}`;
+  }
+  return undefined;
+}
+
+function urlFromUnknown(value: unknown, depth = 0): string | undefined {
+  if (value == null || depth > 4) return undefined;
+  if (typeof value === 'string') return asAbsoluteUrl(value);
+  if (Array.isArray(value)) {
+    const ranked = [...value].sort((a, b) => {
+      const ra = asRecord(a);
+      const rb = asRecord(b);
+      const score = (rec: Record<string, unknown> | null) => {
+        if (!rec) return 0;
+        if (rec.principal === true || rec.principal === 'true') return 3;
+        const pose = String(rec.tipoPose ?? rec.pose ?? '').toUpperCase();
+        if (pose === 'FRENTE') return 2;
+        return 1;
+      };
+      return score(rb) - score(ra);
+    });
+    for (const item of ranked) {
+      const found = urlFromUnknown(item, depth + 1);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  const rec = asRecord(value);
+  if (!rec) return undefined;
+  for (const key of [
+    'linkUrl',
+    'urlFoto',
+    'fotoUrl',
+    'photoUrl',
+    'url',
+    'foto',
+    'imagem',
+    'imagemUrl',
+    'base64',
+    'conteudoBase64',
+    'arquivo',
+    'file',
+    'anexo',
+  ]) {
+    if (!(key in rec)) continue;
+    const found = urlFromUnknown(rec[key], depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function pickFotoUrl(
+  person: Record<string, unknown> | null,
+  root: Record<string, unknown> | null
+): string | undefined {
+  for (const src of [person, root]) {
+    if (!src) continue;
+    const direct = pickString(src, [
+      'fotoUrl',
+      'urlFoto',
+      'photoUrl',
+      'linkUrl',
+      'imagemUrl',
+      'urlImagem',
+    ]);
+    if (direct) {
+      const abs = asAbsoluteUrl(direct);
+      if (abs) return abs;
+    }
+    const nested = urlFromUnknown(
+      src.foto ?? src.fotos ?? src.imagem ?? src.imagens ?? src.arquivoFoto ?? src.fotoPrincipal
+    );
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function poseToKind(pose?: string): BuscaFacialFotoKind | undefined {
+  if (!pose) return undefined;
+  const p = pose
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
+  if (p.includes('FRENTE') || p === 'FRONT' || p === 'FACE') return 'front';
+  if (p.includes('DIREIT') || p.includes('RIGHT') || p === 'PD') return 'right_profile';
+  if (p.includes('ESQUER') || p.includes('LEFT') || p === 'PE') return 'left_profile';
+  return undefined;
+}
+
+function kindFromUnknown(value: unknown): BuscaFacialFotoKind | undefined {
+  const rec = asRecord(value);
+  if (!rec) return undefined;
+  return poseToKind(pickString(rec, ['tipoPose', 'pose', 'tipo', 'tipoFoto', 'lado']));
+}
+
+function collectFotos(
+  person: Record<string, unknown> | null,
+  root: Record<string, unknown> | null
+): BuscaFacialFoto[] {
+  const seen = new Set<string>();
+  const items: BuscaFacialFoto[] = [];
+  const push = (url?: string, kind?: BuscaFacialFotoKind) => {
+    if (!url) return;
+    const existing = items.find((item) => item.uri === url);
+    if (existing) {
+      if (!existing.kind && kind) existing.kind = kind;
+      return;
+    }
+    if (seen.has(url)) return;
+    seen.add(url);
+    items.push({ uri: url, kind });
+  };
+
+  const fromValue = (value: unknown) => {
+    if (value == null) return;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        push(urlFromUnknown(item), kindFromUnknown(item));
+      }
+      return;
+    }
+    push(urlFromUnknown(value), kindFromUnknown(value));
+  };
+
+  for (const src of [person, root]) {
+    if (!src) continue;
+    fromValue(src.fotos ?? src.imagens);
+    fromValue(src.foto);
+    fromValue(src.fotoPrincipal);
+    fromValue(src.arquivoFoto);
+    push(
+      asAbsoluteUrl(
+        pickString(src, ['fotoUrl', 'urlFoto', 'photoUrl', 'linkUrl', 'imagemUrl', 'urlImagem']) ?? ''
+      )
+    );
+  }
+  push(pickFotoUrl(person, root));
+  return items.slice(0, 4);
+}
+
+async function hydrateMatchPhotos(match: BuscaFacialMatch): Promise<BuscaFacialMatch> {
+  const detalhe: BuscaFacialFoto[] = match.fotosDetalhe?.length
+    ? [...match.fotosDetalhe]
+    : (match.fotos ?? []).map((uri) => ({ uri }));
+  if (detalhe.length === 0 && match.fotoUrl) {
+    detalhe.push({ uri: match.fotoUrl });
+  }
+  if (detalhe.length === 0) return match;
+  const fotosDetalhe = await Promise.all(
+    detalhe.map(async (item) => ({ ...item, uri: await hydrateFotoUrl(item.uri) }))
+  );
+  const fotos = fotosDetalhe.map((item) => item.uri);
+  const front = fotosDetalhe.find((item) => item.kind === 'front')?.uri ?? fotos[0];
+  return { ...match, fotosDetalhe, fotos, fotoUrl: front };
+}
+
+async function hydrateFotoUrl(url: string): Promise<string> {
+  if (url.startsWith('data:') || url.startsWith('file:')) return url;
+  try {
+    const response = await fetch(url, {
+      headers: await getAuthHeaders({ Accept: 'image/*' }),
+    });
+    if (!response.ok) return url;
+    const contentType = (response.headers.get('content-type') ?? '').split(';')[0].trim();
+    if (contentType && !contentType.startsWith('image/')) return url;
+    const base64 = arrayBufferToBase64(await response.arrayBuffer());
+    return `data:${contentType || 'image/jpeg'};base64,${base64}`;
+  } catch (error) {
+    console.warn('[GOIASPEN] falha ao baixar foto do match', error);
+    return url;
+  }
 }
 
 function pickString(record: Record<string, unknown> | null, keys: string[]): string | undefined {
@@ -288,6 +499,12 @@ function parseBuscaFacialMatch(data: unknown): BuscaFacialMatch | null {
   const nome = pickString(person, ['nome', 'nomeCompleto', 'name']);
   if (!id && !nome) return null;
 
+  const fotosDetalhe = collectFotos(person, root);
+  const fotoUrl =
+    fotosDetalhe.find((item) => item.kind === 'front')?.uri ??
+    fotosDetalhe[0]?.uri ??
+    pickFotoUrl(person, root);
+
   return {
     id: id ?? nome ?? 'match',
     nome: nome ?? 'Sem nome',
@@ -307,7 +524,14 @@ function parseBuscaFacialMatch(data: unknown): BuscaFacialMatch | null {
     endereco: pickString(person, ['endereco']),
     telefone: pickString(person, ['telefone']),
     email: pickString(person, ['email']),
-    fotoUrl: pickString(person, ['fotoUrl', 'urlFoto', 'foto', 'linkUrl', 'photoUrl']),
+    prontuario:
+      pickString(person, ['prontuario', 'numeroProntuario', 'nrProntuario', 'numProntuario']) ??
+      (pickNumber(person, ['prontuario', 'numeroProntuario', 'nrProntuario']) != null
+        ? String(pickNumber(person, ['prontuario', 'numeroProntuario', 'nrProntuario']))
+        : undefined),
+    fotoUrl,
+    fotos: fotosDetalhe.map((item) => item.uri),
+    fotosDetalhe,
     distance: pickNumber(root, ['distancia', 'distance', 'score', 'similaridade'])
       ?? pickNumber(person, ['distancia', 'distance', 'score', 'similaridade']),
   };
@@ -393,13 +617,29 @@ async function postBuscaFacial(path: string, embedding: number[], label: string)
  */
 export async function buscaFacialMelhorMatch(embedding: number[]): Promise<BuscaFacialMatch | null> {
   const data = await postBuscaFacial('/reeducandos/busca-facial', embedding, 'busca-facial');
-  return parseBuscaFacialMatch(data);
+  const match = parseBuscaFacialMatch(data);
+  if (!match) return null;
+  return hydrateMatchPhotos(match);
 }
 
 /** Até 20 matches, do mais próximo ao mais distante. */
 export async function buscaFacialMatches(embedding: number[]): Promise<BuscaFacialMatch[]> {
   const data = await postBuscaFacial('/reeducandos/busca-facial/matches', embedding, 'busca-facial/matches');
-  return parseBuscaFacialMatchList(data);
+  const parsed = parseBuscaFacialMatchList(data);
+  console.log(
+    '[GOIASPEN] busca-facial/matches fotos',
+    parsed.map((item) => ({
+      id: item.id,
+      nome: item.nome,
+      qtdFotos: item.fotos?.length ?? (item.fotoUrl ? 1 : 0),
+      foto: item.fotoUrl
+        ? item.fotoUrl.startsWith('data:')
+          ? `data-uri(${item.fotoUrl.length})`
+          : item.fotoUrl.slice(0, 160)
+        : null,
+    }))
+  );
+  return Promise.all(parsed.map((item) => hydrateMatchPhotos(item)));
 }
 
 /** Pré-cadastro — espera 201 Created sem corpo. */
@@ -438,6 +678,104 @@ export async function criarPreCadastro(payload: PreCadastroPayload): Promise<voi
 
   if (!response.ok && response.status !== 201) {
     logHttpError('criarPreCadastro erro', {
+      url,
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      response: data,
+    });
+    rejectIfUnauthorized(response.status, data);
+    throw new Error(errorMessage(response.status, data));
+  }
+}
+
+export type PesquisarReeducandoBody = {
+  prontuario?: number;
+  nome?: string;
+  mae?: string;
+  cpf?: string;
+};
+
+/** Pesquisa reeducando por prontuário, nome, mãe e/ou CPF. */
+export async function pesquisarReeducandos(filtro: PesquisarReeducandoBody): Promise<BuscaFacialMatch[]> {
+  const url = `${GOIASPEN_APP_BASE}/reeducandos/pesquisar`;
+  const headers = await getAuthHeaders({
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  });
+
+  console.log('[GOIASPEN] pesquisarReeducandos request', {
+    method: 'POST',
+    url,
+    body: filtro,
+  });
+  console.log('[GOIASPEN] pesquisarReeducandos body JSON', JSON.stringify(filtro));
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(filtro),
+  });
+  const data = await parseResponseBody(response);
+
+  console.log('[GOIASPEN] pesquisarReeducandos response', {
+    status: response.status,
+    ok: response.ok,
+    body: data,
+  });
+
+  if (!response.ok) {
+    logHttpError('pesquisarReeducandos erro', {
+      url,
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      response: data,
+    });
+    rejectIfUnauthorized(response.status, data);
+    throw new Error(errorMessage(response.status, data));
+  }
+
+  return Promise.all(parseBuscaFacialMatchList(data).map((item) => hydrateMatchPhotos(item)));
+}
+
+/** Atualiza só o vetor facial de um reeducando já existente. */
+export async function atualizaBiometriaFacial(id: string, embedding: number[]): Promise<void> {
+  const url = `${GOIASPEN_APP_BASE}/atualiza-biometria-facial`;
+  const headers = await getAuthHeaders({
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  });
+  const payload = { idReeducando: id, embedding };
+
+  console.log('[GOIASPEN] atualizaBiometriaFacial request', {
+    method: 'POST',
+    url,
+    headers: {
+      Accept: headers.Accept,
+      'Content-Type': headers['Content-Type'],
+      Authorization: headers.Authorization ? 'Bearer ***' : undefined,
+    },
+    idReeducando: id,
+    embeddingSize: embedding.length,
+    body: payload,
+  });
+  console.log('[GOIASPEN] atualizaBiometriaFacial body JSON', JSON.stringify(payload));
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const data = await parseResponseBody(response);
+
+  console.log('[GOIASPEN] atualizaBiometriaFacial response', {
+    status: response.status,
+    ok: response.ok,
+    contentType: response.headers.get('content-type'),
+    body: data,
+  });
+
+  if (!response.ok) {
+    logHttpError('atualizaBiometriaFacial erro', {
       url,
       status: response.status,
       contentType: response.headers.get('content-type'),

@@ -5,7 +5,9 @@ import { useLocalSearchParams } from 'expo-router';
 
 function asCaptureMode(value: string | string[] | undefined): BiometricCaptureMode {
   const raw = Array.isArray(value) ? value[0] : value;
-  if (raw === 'register' || raw === 'prefill' || raw === 'identify') return raw;
+  if (raw === 'register' || raw === 'prefill' || raw === 'identify' || raw === 'update' || raw === 'update-photo') {
+    return raw;
+  }
   return 'identify';
 }
 

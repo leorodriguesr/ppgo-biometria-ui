@@ -4,6 +4,7 @@ import { useBustPhotoQuality } from '@/src/features/photos/hooks/useBustPhotoQua
 import { BUST_PHOTO_HINTS, BUST_PHOTO_LABELS, type BustPhotoKind } from '@/src/features/photos/types';
 import { validateDetaineePhoto } from '@/src/features/photos/validateDetaineePhoto';
 import { addPrisonerPhoto } from '@/src/services/database';
+import { persistLocalImage } from '@/src/services/localImageStorage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -99,10 +100,11 @@ export default function BustCaptureScreen() {
         return;
       }
 
+      const persistedUri = await persistLocalImage(uri, draftPrisonerId, kind);
       await addPrisonerPhoto({
         prisonerId: draftPrisonerId,
         photoType: kind,
-        photoUri: uri,
+        photoUri: persistedUri,
         qualityOk: true,
       });
 
@@ -150,7 +152,7 @@ export default function BustCaptureScreen() {
       <CameraView
         ref={camera}
         style={StyleSheet.absoluteFill}
-        facing="front"
+        facing="back"
         animateShutter={false}
       />
 

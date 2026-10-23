@@ -1,4 +1,9 @@
 import * as SQLite from 'expo-sqlite';
+import {
+    LOCAL_FACE_CANDIDATE_THRESHOLD,
+    LOCAL_FACE_MATCH_THRESHOLD,
+} from '@/src/configs/runtimeConfig';
+import { clearPersistedLocalImages } from '@/src/services/localImageStorage';
 
 let db: SQLite.SQLiteDatabase | null = null;
 let initPromise: Promise<void> | null = null;
@@ -46,7 +51,7 @@ const ensureDb = async (): Promise<SQLite.SQLiteDatabase> => {
 };
 
 /** Incrementar para forçar novo wipe local (ex.: pedido do usuário). */
-const LOCAL_DB_WIPE_TOKEN = 'wipe-2026-08-17-1';
+const LOCAL_DB_WIPE_TOKEN = 'wipe-2026-09-22-4';
 
 async function runOneTimeWipeIfNeeded(database: SQLite.SQLiteDatabase): Promise<void> {
     await database.execAsync(`
@@ -63,6 +68,7 @@ async function runOneTimeWipeIfNeeded(database: SQLite.SQLiteDatabase): Promise<
     await database.runAsync('DELETE FROM prisoner_photos');
     await database.runAsync('DELETE FROM prisoners');
     await database.runAsync('DELETE FROM activity_log');
+    await clearPersistedLocalImages();
     try {
         await database.runAsync('DELETE FROM sqlite_sequence WHERE name="prisoners"');
         await database.runAsync('DELETE FROM sqlite_sequence WHERE name="prisoner_photos"');
@@ -165,6 +171,7 @@ export interface PrisonerRow {
     sexo: string | null;
     rg: string | null;
     orgao_emissor: string | null;
+    prontuario: string | null;
 }
 
 /** Migração: adiciona coluna face_embedding se a tabela já existia sem ela. */
@@ -191,6 +198,7 @@ const NEW_COLUMNS = [
     'sexo',
     'rg',
     'orgao_emissor',
+    'prontuario',
 ] as const;
 
 async function migrateNewPrisonerFields(database: SQLite.SQLiteDatabase): Promise<void> {
@@ -222,6 +230,7 @@ export type PrisonerExtraFields = {
     sexo?: string;
     rg?: string;
     orgaoEmissor?: string;
+    prontuario?: string;
 };
 
 export const addPrisoner = async (
@@ -239,8 +248,8 @@ export const addPrisoner = async (
             name, mother_name, dob, cpf, photo_uri, face_embedding,
             social_name, nationality, marital_status, profession, education,
             age, birth_place, filiation, address, phone, email,
-            sexo, rg, orgao_emissor
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            sexo, rg, orgao_emissor, prontuario
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         name,
         motherName,
         dob,
@@ -260,7 +269,8 @@ export const addPrisoner = async (
         extra?.email ?? null,
         extra?.sexo ?? null,
         extra?.rg ?? null,
-        extra?.orgaoEmissor ?? null
+        extra?.orgaoEmissor ?? null,
+        extra?.prontuario ?? null
     );
     return result.lastInsertRowId;
 };
@@ -302,6 +312,7 @@ export const updatePrisoner = async (
         ['sexo', fields.sexo],
         ['rg', fields.rg],
         ['orgao_emissor', fields.orgaoEmissor],
+        ['prontuario', fields.prontuario],
     ];
 
     for (const [column, value] of map) {
@@ -320,6 +331,26 @@ export const updatePrisoner = async (
 export const getPrisoners = async (): Promise<PrisonerRow[]> => {
     const database = await ensureDb();
     return await database.getAllAsync<PrisonerRow>('SELECT * FROM prisoners ORDER BY id DESC');
+};
+
+export const searchPrisonersLocal = async (filter: {
+    prontuario?: number;
+    nome?: string;
+    mae?: string;
+    cpf?: string;
+}): Promise<PrisonerRow[]> => {
+    const rows = await getPrisoners();
+    const normalizeText = (value: string | null | undefined) =>
+        (value ?? '').trim().toLocaleUpperCase('pt-BR');
+    const digits = (value: string | null | undefined) => (value ?? '').replace(/\D/g, '');
+
+    return rows.filter((row) => {
+        if (filter.prontuario != null && digits(row.prontuario) !== String(filter.prontuario)) return false;
+        if (filter.nome && !normalizeText(row.name).includes(normalizeText(filter.nome))) return false;
+        if (filter.mae && !normalizeText(row.mother_name).includes(normalizeText(filter.mae))) return false;
+        if (filter.cpf && digits(row.cpf) !== digits(filter.cpf)) return false;
+        return true;
+    });
 };
 
 export const getLastPrisoner = async () => {
@@ -344,6 +375,7 @@ export const clearDatabase = async () => {
     } catch {
         // ignore
     }
+    await clearPersistedLocalImages();
 };
 
 export const addActivity = async (input: {
@@ -443,47 +475,68 @@ function euclideanDistance(a: number[], b: number[]): number {
 
 /**
  * Limite de distância L2 para considerar match.
- * Embeddings 512-d costumam ter distância L2 na faixa 5–25 para a mesma pessoa (depende do modelo Python).
- * Ajuste conforme o modelo: se nunca der match, aumente; se der match em pessoas diferentes, diminua.
+ * Os embeddings retornados pelo Python são normalizados; a distância possível fica entre 0 e 2.
+ * O melhor resultado precisa passar no limite principal. Depois disso, resultados dentro
+ * da faixa de candidatos também são exibidos para o operador resolver ambiguidades.
  */
-const IDENTIFY_THRESHOLD = 25;
+
+export interface LocalIdentifyCandidate {
+    preso_id: string;
+    distance: number;
+}
+
+export const identifyMatchesByEmbeddingLocal = async (
+    embedding: number[],
+    limit = 20
+): Promise<LocalIdentifyCandidate[]> => {
+    const database = await ensureDb();
+    const rows = await database.getAllAsync<{ id: number; face_embedding: string | null }>(
+        'SELECT id, face_embedding FROM prisoners WHERE face_embedding IS NOT NULL AND face_embedding != ""'
+    );
+    const candidates: LocalIdentifyCandidate[] = [];
+
+    for (const row of rows) {
+        if (!row.face_embedding) continue;
+        try {
+            const parsed = JSON.parse(row.face_embedding);
+            const stored = Array.isArray(parsed)
+                ? parsed
+                : typeof parsed === 'string'
+                    ? JSON.parse(parsed)
+                    : [];
+            if (!Array.isArray(stored) || stored.length !== embedding.length) continue;
+            const distance = euclideanDistance(embedding, stored);
+            candidates.push({ preso_id: String(row.id), distance });
+        } catch {
+            // ignora embeddings antigos ou corrompidos
+        }
+    }
+
+    candidates.sort((a, b) => a.distance - b.distance);
+    const best = candidates[0];
+    console.log('[DB] Distâncias da identificação local', candidates.map((item) => ({
+        id: item.preso_id,
+        distance: Number(item.distance.toFixed(4)),
+    })));
+    if (!best || best.distance > LOCAL_FACE_MATCH_THRESHOLD) return [];
+    return candidates
+        .filter(
+            (candidate) =>
+                candidate.distance <=
+                Math.max(LOCAL_FACE_MATCH_THRESHOLD, LOCAL_FACE_CANDIDATE_THRESHOLD)
+        )
+        .slice(0, limit);
+};
 
 /**
  * Identifica o preso comparando o embedding com os cadastros no banco local.
  * Retorna o mesmo formato da API Java (IdentifyResponse) para poder trocar depois.
  */
 export const identifyByEmbeddingLocal = async (embedding: number[]): Promise<IdentifyResponse> => {
-    const database = await ensureDb();
-    const rows = await database.getAllAsync<{ id: number; face_embedding: string | null }>(
-        'SELECT id, face_embedding FROM prisoners WHERE face_embedding IS NOT NULL AND face_embedding != ""'
-    );
-
-    let bestId: number | null = null;
-    let bestDistance = Infinity;
-
-    for (const row of rows) {
-        const raw = row.face_embedding;
-        if (raw == null || raw === '') continue;
-        let stored: number[];
-        try {
-            const parsed = JSON.parse(raw);
-            stored = Array.isArray(parsed) ? parsed : (typeof parsed === 'string' ? JSON.parse(parsed) : []);
-        } catch {
-            continue;
-        }
-        if (stored.length !== embedding.length) continue;
-        const dist = euclideanDistance(embedding, stored);
-        if (dist < bestDistance) {
-            bestDistance = dist;
-            bestId = row.id;
-        }
-    }
-
-    const match = bestId !== null && bestDistance <= IDENTIFY_THRESHOLD;
+    const [best] = await identifyMatchesByEmbeddingLocal(embedding, 1);
     return {
-        match,
-        ...(match && bestId !== null && { preso_id: String(bestId) }),
-        ...(bestId !== null && { distance: bestDistance }),
+        match: Boolean(best),
+        ...(best && { preso_id: best.preso_id, distance: best.distance }),
     };
 };
 

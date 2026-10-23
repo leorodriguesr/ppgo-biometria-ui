@@ -21,8 +21,8 @@ const FRAME_Y = height * 0.12;
 
 const GUIDE_IMAGES: Record<BustPhotoKind, number> = {
   front: require('@/assets/images/guides/front-overlay.png'),
-  left_profile: require('@/assets/images/guides/right_profile-overlay.png'),
-  right_profile: require('@/assets/images/guides/left_profile-overlay.png'),
+  left_profile: require('@/assets/images/guides/left_profile-overlay.png'),
+  right_profile: require('@/assets/images/guides/right_profile-overlay.png'),
 };
 
 interface BustPhotoOverlayProps {

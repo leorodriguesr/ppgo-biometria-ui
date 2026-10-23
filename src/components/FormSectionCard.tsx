@@ -21,7 +21,7 @@ export function FormSectionCard({
   children,
 }: Props) {
   return (
-    <View style={[styles.card, open && styles.cardOpen]}>
+    <View style={styles.card}>
       <TouchableOpacity style={styles.header} onPress={onToggle} activeOpacity={0.75}>
         <View style={styles.iconWrap}>
           <Ionicons name={icon} size={20} color="#0D9488" />
@@ -47,9 +47,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
     overflow: 'hidden',
-  },
-  cardOpen: {
-    borderColor: '#99F6E4',
   },
   header: {
     flexDirection: 'row',

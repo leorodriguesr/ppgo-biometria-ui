@@ -2,9 +2,11 @@ import { isUnauthorizedError } from '@/src/auth/unauthorizedSession';
 import { BustPhotoOverlay } from '@/src/components/BustPhotoOverlay';
 import { SelectField } from '@/src/components/SelectField';
 import type { SelectOption } from '@/src/configs/cadastroOptions';
+import { USE_LOCAL_DATABASE } from '@/src/configs/runtimeConfig';
 import { useBustPhotoQuality } from '@/src/features/photos/hooks/useBustPhotoQuality';
 import type { MarkPhotoKind } from '@/src/features/photos/types';
 import { addPrisonerPhoto } from '@/src/services/database';
+import { persistLocalImage } from '@/src/services/localImageStorage';
 import {
   listarPartesCorpo,
   listarTiposSinal,
@@ -25,6 +27,27 @@ import {
 } from 'react-native';
 
 type Phase = 'form' | 'camera';
+
+const LOCAL_SIGN_OPTIONS: SelectOption[] = [
+  { label: 'Tatuagem', value: 'tattoo' },
+  { label: 'Cicatriz', value: 'scar' },
+  { label: 'Marca de nascença', value: 'birthmark' },
+  { label: 'Outro sinal', value: 'other' },
+];
+
+const LOCAL_BODY_PART_OPTIONS: SelectOption[] = [
+  'Cabeça',
+  'Rosto',
+  'Pescoço',
+  'Tórax',
+  'Costas',
+  'Braço direito',
+  'Braço esquerdo',
+  'Mão direita',
+  'Mão esquerda',
+  'Perna direita',
+  'Perna esquerda',
+].map((label, index) => ({ label, value: String(index + 1) }));
 
 export default function MarkCaptureScreen() {
   const router = useRouter();
@@ -54,6 +77,11 @@ export default function MarkCaptureScreen() {
     (async () => {
       setLoadingCatalogs(true);
       try {
+        if (USE_LOCAL_DATABASE) {
+          setTipoSinalOptions(LOCAL_SIGN_OPTIONS);
+          setParteCorpoOptions(LOCAL_BODY_PART_OPTIONS);
+          return;
+        }
         const [tipos, partes] = await Promise.all([listarTiposSinal(), listarPartesCorpo()]);
         if (cancelled) return;
         setTipoSinalOptions(
@@ -145,11 +173,16 @@ export default function MarkCaptureScreen() {
       const resolvedKind: MarkPhotoKind = sinalLabel.toLowerCase().includes('tatu')
         ? 'tattoo'
         : 'mark';
+      const persistedUri = await persistLocalImage(
+        uri,
+        draftPrisonerId,
+        `${resolvedKind}-${Date.now()}`
+      );
 
       await addPrisonerPhoto({
         prisonerId: draftPrisonerId,
         photoType: resolvedKind,
-        photoUri: uri,
+        photoUri: persistedUri,
         bodyRegion: parteCorpoId,
         qualityOk: true,
         sinal: sinalId,

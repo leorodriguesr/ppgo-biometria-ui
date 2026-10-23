@@ -1,9 +1,15 @@
+import type { BustPhotoKind } from '@/src/features/photos/types';
 import type { PrisonerPhotoRow, PrisonerRow } from '@/src/services/database';
-import type { BuscaFacialMatch } from '@/src/services/goiaspenAppApi';
+import type { BuscaFacialFoto, BuscaFacialMatch } from '@/src/services/goiaspenAppApi';
+import type { PrefillBustPhoto } from '@/src/services/persistPrefillPhotos';
 
 export type IdentifyMatchView = {
   prisoner: PrisonerRow;
   photos: PrisonerPhotoRow[];
+  /** Fotos extras da API, sem a de frente. */
+  galleryUris: string[];
+  bustPhotos: PrefillBustPhoto[];
+  reeducandoId: string;
   distance?: number;
 };
 
@@ -33,13 +39,59 @@ function toPrisonerRow(match: BuscaFacialMatch): PrisonerRow {
     sexo: match.sexo ?? null,
     rg: match.rg ?? null,
     orgao_emissor: match.orgaoEmissor ?? null,
+    prontuario: match.prontuario ?? null,
   };
 }
 
+function assignBustPhotos(match: BuscaFacialMatch): PrefillBustPhoto[] {
+  const slots: BustPhotoKind[] = ['front', 'right_profile', 'left_profile'];
+  const used = new Set<BustPhotoKind>();
+  const out: PrefillBustPhoto[] = [];
+  const detalhe: BuscaFacialFoto[] = match.fotosDetalhe?.length
+    ? match.fotosDetalhe
+    : (match.fotos ?? []).map((uri) => ({ uri }));
+
+  for (const item of detalhe) {
+    if (item.kind && slots.includes(item.kind) && !used.has(item.kind)) {
+      used.add(item.kind);
+      out.push({ kind: item.kind, uri: item.uri });
+    }
+  }
+  for (const item of detalhe) {
+    if (out.some((photo) => photo.uri === item.uri)) continue;
+    const kind = slots.find((slot) => !used.has(slot));
+    if (!kind) break;
+    used.add(kind);
+    out.push({ kind, uri: item.uri });
+  }
+  return out;
+}
+
 export function setIdentifyMatch(match: BuscaFacialMatch): IdentifyMatchView {
+  const bustPhotos = assignBustPhotos(match);
+  const front = bustPhotos.find((photo) => photo.kind === 'front')?.uri ?? match.fotoUrl ?? match.fotos?.[0];
+  const galleryUris = (match.fotos ?? []).filter((uri) => uri !== front);
+  const prisoner = toPrisonerRow(match);
+  if (front) prisoner.photo_uri = front;
+  const photos: PrisonerPhotoRow[] = bustPhotos.map((photo, index) => ({
+    id: index + 1,
+    prisoner_id: prisoner.id,
+    photo_type: photo.kind,
+    body_region: null,
+    body_side: null,
+    photo_uri: photo.uri,
+    quality_ok: 1,
+    created_at: '',
+    sinal: null,
+    parte_corpo: null,
+    observacao: null,
+  }));
   const view: IdentifyMatchView = {
-    prisoner: toPrisonerRow(match),
-    photos: [],
+    prisoner,
+    photos,
+    galleryUris,
+    bustPhotos,
+    reeducandoId: match.id,
     distance: match.distance,
   };
   cache.set(match.id, view);
@@ -66,7 +118,13 @@ export function getIdentifyMatch(id?: string): IdentifyMatchView | null {
   return cache.get('last') ?? null;
 }
 
-export type FacialSearchPurpose = 'identify' | 'prefill';
+export function clearIdentifyMatches(): void {
+  cache.clear();
+  matchList = [];
+  searchPurpose = 'identify';
+}
+
+export type FacialSearchPurpose = 'identify' | 'prefill' | 'update';
 
 let searchPurpose: FacialSearchPurpose = 'identify';
 
@@ -79,12 +137,17 @@ export function getFacialSearchPurpose(): FacialSearchPurpose {
 }
 
 export function registerParamsFromMatch(match: BuscaFacialMatch): Record<string, string> {
+  setIdentifyMatch(match);
   return {
+    prefillMatchId: match.id,
     prefillName: match.nome ?? '',
     prefillMotherName: match.mae ?? '',
     prefillDob: match.dataNascimento ?? '',
     prefillCpf: match.cpf ?? '',
     prefillSocialName: match.nomeSocial ?? '',
+    prefillSexo: match.sexo ?? '',
+    prefillRg: match.rg ?? '',
+    prefillOrgaoEmissor: match.orgaoEmissor ?? '',
     prefillNationality: match.nacionalidade ?? '',
     prefillMaritalStatus: match.estadoCivil ?? '',
     prefillProfession: match.profissao ?? '',
@@ -94,6 +157,7 @@ export function registerParamsFromMatch(match: BuscaFacialMatch): Record<string,
     prefillAddress: match.endereco ?? '',
     prefillPhone: match.telefone ?? '',
     prefillEmail: match.email ?? '',
+    prefillProntuario: match.prontuario ?? '',
     prefillSource: 'face',
   };
 }

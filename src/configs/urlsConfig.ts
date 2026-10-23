@@ -7,7 +7,13 @@ import { domainNameHomo, domainNameProd } from './sistemaConfig';
 
 export type Ambiente = 'PROD' | 'HOMO';
 
-export const ambiente: Ambiente = __DEV__ ? 'HOMO' : 'PROD';
+function readAmbiente(): Ambiente {
+  const raw = (process.env.EXPO_PUBLIC_AMBIENTE ?? '').trim().toUpperCase();
+  if (raw === 'HOMO' || raw === 'PROD') return raw;
+  return __DEV__ ? 'HOMO' : 'PROD';
+}
+
+export const ambiente: Ambiente = readAmbiente();
 
 const URLS_BY_ENV = {
   PROD: {
@@ -15,12 +21,16 @@ const URLS_BY_ENV = {
     SSOWS: 'https://ssows.ssp.go.gov.br/',
     /** API IntegracaoGoiasPenApp (/api/goiaspenApp). */
     GOIASPEN: 'https://goiaspen.ssp.go.gov.br/',
+    /** API Python (embedding / qualidade de foto). Preencha com o HTTPS do gateway. */
+    BIOMETRIA: 'https://ppgobiometriafacialapi.ssp.go.gov.br/',
   },
   HOMO: {
     SIGUWS: 'https://siguws-h.ssp.go.gov.br/',
     SSOWS: 'https://ssows-h.ssp.go.gov.br/',
     /** API IntegracaoGoiasPenApp (/api/goiaspenApp). */
     GOIASPEN: 'https://goiaspen-homo.ssp.go.gov.br/',
+    /** API Python (embedding / qualidade de foto). */
+    BIOMETRIA: 'https://ppgobiometriafacialapi-homo.ssp.go.gov.br/',
   },
 } as const;
 

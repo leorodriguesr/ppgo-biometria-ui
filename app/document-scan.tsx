@@ -73,7 +73,7 @@ export default function DocumentScanScreen() {
             }
 
             const hasAnyField = Boolean(
-                extracted.name || extracted.motherName || extracted.dob || extracted.cpf
+                extracted.name || extracted.motherName || extracted.dob || extracted.cpf || extracted.sexo
             );
 
             if (!hasAnyField) {
@@ -91,6 +91,7 @@ export default function DocumentScanScreen() {
                     prefillMotherName: extracted.motherName ?? '',
                     prefillDob: extracted.dob ?? '',
                     prefillCpf: extracted.cpf ?? '',
+                    prefillSexo: extracted.sexo ?? '',
                     prefillSocialName: extracted.socialName ?? '',
                     prefillNationality: extracted.nationality ?? '',
                     prefillMaritalStatus: extracted.maritalStatus ?? '',
